@@ -89,6 +89,15 @@ export const reportsAPI = {
     api.get('/api/reports/export/usage', { params: { days }, responseType: 'blob' }),
 };
 
+// Backup/Restore
+export const backupAPI = {
+  download: () => api.get('/api/backup', { responseType: 'blob' }),
+  restoreIngredients: (ingredients, mode = 'merge') => 
+    api.post('/api/restore/ingredients', { ingredients }, { params: { mode } }),
+  restoreMenus: (menus, mode = 'merge') => 
+    api.post('/api/restore/menus', { menus }, { params: { mode } }),
+};
+
 // Settings
 export const settingsAPI = {
   get: () => api.get('/api/settings'),

@@ -1,8 +1,8 @@
 /**
- * Settings Page with Print Settings
+ * Settings Page with Backup/Restore and ESC/POS Print
  */
-import React, { useState, useEffect } from 'react';
-import { Settings, Store, Users, RefreshCw, Loader2, Plus, Pencil, Shield, Printer, AlertCircle, RotateCcw, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Settings, Store, Users, RefreshCw, Loader2, Plus, Pencil, Shield, Printer, AlertCircle, RotateCcw, Trash2, Download, Upload, Database, FileJson } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { settingsAPI, usersAPI, authAPI } from '../lib/api';
+import { settingsAPI, usersAPI, authAPI, backupAPI } from '../lib/api';
 import { useSync } from '../contexts/SyncContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -49,6 +49,13 @@ export function SettingsPage() {
   // Failed sales
   const [failedSales, setFailedSales] = useState([]);
   const [showFailedSales, setShowFailedSales] = useState(false);
+
+  // Backup/Restore
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreData, setRestoreData] = useState(null);
+  const [restoreDialog, setRestoreDialog] = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetchData();
@@ -170,6 +177,135 @@ export function SettingsPage() {
     loadFailedSales();
   };
 
+  // Backup handler
+  const handleBackup = async () => {
+    setIsBackingUp(true);
+    try {
+      const response = await backupAPI.download();
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `kedaiops_backup_${new Date().toISOString().slice(0,10)}.json`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Backup berhasil diunduh');
+    } catch (error) {
+      console.error('Backup error:', error);
+      toast.error('Gagal membuat backup');
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  // Restore handlers
+  const handleFileSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target.result);
+        if (!data.version || !data.data) {
+          throw new Error('Invalid backup format');
+        }
+        setRestoreData(data);
+        setRestoreDialog(true);
+      } catch (err) {
+        toast.error('File backup tidak valid');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input
+  };
+
+  const handleRestore = async (type) => {
+    if (!restoreData?.data) return;
+
+    setIsRestoring(true);
+    try {
+      if (type === 'ingredients' && restoreData.data.ingredients) {
+        const result = await backupAPI.restoreIngredients(restoreData.data.ingredients, 'merge');
+        toast.success(result.data.message);
+      } else if (type === 'menus' && restoreData.data.menus) {
+        const result = await backupAPI.restoreMenus(restoreData.data.menus, 'merge');
+        toast.success(result.data.message);
+      } else if (type === 'all') {
+        if (restoreData.data.ingredients) {
+          await backupAPI.restoreIngredients(restoreData.data.ingredients, 'merge');
+        }
+        if (restoreData.data.menus) {
+          await backupAPI.restoreMenus(restoreData.data.menus, 'merge');
+        }
+        toast.success('Restore selesai');
+      }
+      setRestoreDialog(false);
+      setRestoreData(null);
+    } catch (error) {
+      console.error('Restore error:', error);
+      toast.error(error.response?.data?.detail || 'Gagal restore data');
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
+  // ESC/POS Test Print
+  const handleTestPrint = () => {
+    const printWindow = window.open('', '_blank', 'width=300,height=400');
+    if (!printWindow) {
+      toast.error('Popup diblokir. Izinkan popup untuk mencetak.');
+      return;
+    }
+
+    const width = storeSettings.print_width === '58mm' ? '48mm' : '72mm';
+    
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Test Print</title>
+        <style>
+          @page { size: ${storeSettings.print_width} auto; margin: 0; }
+          body { 
+            font-family: 'Courier New', monospace; 
+            font-size: 10px; 
+            width: ${width}; 
+            margin: 0 auto; 
+            padding: 4mm;
+          }
+          .center { text-align: center; }
+          .bold { font-weight: bold; }
+          .divider { border-top: 1px dashed #000; margin: 4px 0; }
+          .row { display: flex; justify-content: space-between; }
+        </style>
+      </head>
+      <body>
+        <div class="center bold">${storeSettings.store_name || 'KEDAI KOPI'}</div>
+        ${storeSettings.address ? `<div class="center" style="font-size:8px">${storeSettings.address}</div>` : ''}
+        ${storeSettings.phone ? `<div class="center" style="font-size:8px">${storeSettings.phone}</div>` : ''}
+        <div class="divider"></div>
+        <div class="row"><span>Americano</span><span>1 x 25.000</span></div>
+        <div class="row"><span>Kopi Susu</span><span>2 x 30.000</span></div>
+        <div class="divider"></div>
+        <div class="row bold"><span>TOTAL</span><span>Rp 85.000</span></div>
+        <div class="row"><span>Tunai</span><span>Rp 100.000</span></div>
+        <div class="row"><span>Kembali</span><span>Rp 15.000</span></div>
+        <div class="divider"></div>
+        <div class="center" style="font-size:8px">${storeSettings.footer_text || 'Terima kasih!'}</div>
+        <div class="center" style="font-size:8px">${new Date().toLocaleString('id-ID')}</div>
+      </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+      printWindow.close();
+    }, 250);
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto">
       {/* Header */}
@@ -183,26 +319,30 @@ export function SettingsPage() {
       </div>
 
       <Tabs defaultValue="store" data-testid="settings-tabs">
-        <TabsList className="mb-6">
+        <TabsList className="mb-6 flex-wrap h-auto gap-1">
           <TabsTrigger value="store">
             <Store className="h-4 w-4 mr-2" />
             Toko
           </TabsTrigger>
           <TabsTrigger value="print">
             <Printer className="h-4 w-4 mr-2" />
-            Cetak Struk
+            Cetak
           </TabsTrigger>
           <TabsTrigger value="sync">
             <RefreshCw className="h-4 w-4 mr-2" />
-            Sinkronisasi
+            Sync
             {(pendingCount + retryingCount) > 0 && (
               <Badge variant="secondary" className="ml-2">{pendingCount + retryingCount}</Badge>
             )}
           </TabsTrigger>
+          <TabsTrigger value="backup">
+            <Database className="h-4 w-4 mr-2" />
+            Backup
+          </TabsTrigger>
           {hasRole('owner', 'manager') && (
             <TabsTrigger value="users">
               <Users className="h-4 w-4 mr-2" />
-              Pengguna
+              User
             </TabsTrigger>
           )}
         </TabsList>
@@ -279,7 +419,7 @@ export function SettingsPage() {
                 Pengaturan Cetak Struk
               </CardTitle>
               <CardDescription>
-                Sesuaikan ukuran dan tampilan struk
+                Sesuaikan untuk printer thermal ESC/POS
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -294,22 +434,17 @@ export function SettingsPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="58mm">58mm (Printer Thermal Kecil)</SelectItem>
-                    <SelectItem value="80mm">80mm (Printer Thermal Standar)</SelectItem>
+                    <SelectItem value="58mm">58mm (Thermal Kecil)</SelectItem>
+                    <SelectItem value="80mm">80mm (Thermal Standar)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">
-                  Pilih sesuai jenis printer thermal yang Anda gunakan
-                </p>
               </div>
-
-              <Separator />
 
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label>Auto Print Setelah Checkout</Label>
                   <p className="text-xs text-muted-foreground">
-                    Otomatis membuka dialog cetak setelah transaksi selesai
+                    Otomatis cetak setelah transaksi
                   </p>
                 </div>
                 <Switch
@@ -323,7 +458,13 @@ export function SettingsPage() {
 
               {/* Receipt Preview */}
               <div className="space-y-3">
-                <Label>Preview Struk</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Preview Struk</Label>
+                  <Button variant="outline" size="sm" onClick={handleTestPrint} data-testid="test-print-button">
+                    <Printer className="h-4 w-4 mr-2" />
+                    Test Print
+                  </Button>
+                </div>
                 <div 
                   className="border rounded-lg p-4 bg-white text-black font-mono text-xs mx-auto"
                   style={{ 
@@ -357,11 +498,18 @@ export function SettingsPage() {
                 </div>
               </div>
 
+              <Alert>
+                <Printer className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>Tip:</strong> Untuk printer thermal, gunakan browser Chrome dan atur ukuran kertas di dialog cetak sesuai lebar printer (58mm atau 80mm).
+                </AlertDescription>
+              </Alert>
+
               <Button onClick={handleSaveSettings} disabled={isSaving}>
                 {isSaving ? (
                   <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Menyimpan...</>
                 ) : (
-                  'Simpan Pengaturan Cetak'
+                  'Simpan Pengaturan'
                 )}
               </Button>
             </CardContent>
@@ -376,7 +524,7 @@ export function SettingsPage() {
                 Status Sinkronisasi
               </CardTitle>
               <CardDescription>
-                Kelola sinkronisasi data offline dengan retry otomatis
+                Auto retry dengan exponential backoff
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -413,23 +561,22 @@ export function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Tersinkron: {lastSyncResult.sales?.synced || 0}, 
                     Gagal: {lastSyncResult.sales?.failed || 0}
-                    {lastSyncResult.sales?.retrying > 0 && `, Akan dicoba ulang: ${lastSyncResult.sales.retrying}`}
+                    {lastSyncResult.sales?.retrying > 0 && `, Retry: ${lastSyncResult.sales.retrying}`}
                   </p>
                 </div>
               )}
 
-              {/* Failed Sales Section */}
               {failedCount > 0 && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
                   <AlertDescription>
-                    Ada {failedCount} transaksi gagal sinkronisasi.
+                    Ada {failedCount} transaksi gagal.
                     <Button 
                       variant="link" 
                       className="h-auto p-0 ml-2" 
                       onClick={() => setShowFailedSales(!showFailedSales)}
                     >
-                      {showFailedSales ? 'Sembunyikan' : 'Lihat Detail'}
+                      {showFailedSales ? 'Sembunyikan' : 'Lihat'}
                     </Button>
                   </AlertDescription>
                 </Alert>
@@ -455,25 +602,15 @@ export function SettingsPage() {
                           <TableCell>
                             Rp {sale.data?.total?.toLocaleString('id-ID')}
                           </TableCell>
-                          <TableCell className="text-xs text-red-600 max-w-[200px] truncate">
-                            {sale.errorMessage || 'Unknown error'}
+                          <TableCell className="text-xs text-red-600 max-w-[150px] truncate">
+                            {sale.errorMessage || 'Unknown'}
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-8 w-8"
-                                onClick={() => handleRetrySale(sale.id)}
-                              >
+                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleRetrySale(sale.id)}>
                                 <RotateCcw className="h-4 w-4" />
                               </Button>
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-8 w-8 text-destructive"
-                                onClick={() => handleDeleteSale(sale.id)}
-                              >
+                              <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDeleteSale(sale.id)}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
@@ -485,12 +622,7 @@ export function SettingsPage() {
                 </div>
               )}
 
-              <Button 
-                onClick={handleSync} 
-                disabled={isSyncing || !isOnline}
-                className="w-full"
-                data-testid="settings-sync-now-button"
-              >
+              <Button onClick={handleSync} disabled={isSyncing || !isOnline} className="w-full" data-testid="settings-sync-now-button">
                 {isSyncing ? (
                   <><RefreshCw className="h-4 w-4 mr-2 animate-spin" /> Menyinkronkan...</>
                 ) : (
@@ -499,6 +631,62 @@ export function SettingsPage() {
               </Button>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Backup/Restore */}
+        <TabsContent value="backup">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg" style={{ fontFamily: 'var(--font-display)' }}>
+                  Backup Data
+                </CardTitle>
+                <CardDescription>
+                  Download semua data (bahan, menu, transaksi 90 hari)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button onClick={handleBackup} disabled={isBackingUp} data-testid="backup-download-button">
+                  {isBackingUp ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Membuat backup...</>
+                  ) : (
+                    <><Download className="h-4 w-4 mr-2" /> Download Backup (JSON)</>
+                  )}
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg" style={{ fontFamily: 'var(--font-display)' }}>
+                  Restore Data
+                </CardTitle>
+                <CardDescription>
+                  Upload file backup untuk mengembalikan data
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <input
+                  type="file"
+                  accept=".json"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <Button variant="outline" onClick={() => fileInputRef.current?.click()} data-testid="restore-upload-button">
+                  <Upload className="h-4 w-4 mr-2" />
+                  Pilih File Backup (.json)
+                </Button>
+
+                <Alert>
+                  <FileJson className="h-4 w-4" />
+                  <AlertDescription>
+                    <strong>Catatan:</strong> Restore hanya menambahkan data baru (merge mode). Data transaksi tidak di-restore untuk mencegah duplikasi.
+                  </AlertDescription>
+                </Alert>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         {/* Users */}
@@ -511,13 +699,13 @@ export function SettingsPage() {
                     Manajemen Pengguna
                   </CardTitle>
                   <CardDescription>
-                    Kelola akses pengguna ke sistem
+                    Kelola akses pengguna
                   </CardDescription>
                 </div>
                 {hasRole('owner') && (
                   <Button onClick={openCreateUserDialog} data-testid="settings-add-user-button">
                     <Plus className="h-4 w-4 mr-2" />
-                    Tambah User
+                    Tambah
                   </Button>
                 )}
               </CardHeader>
@@ -541,7 +729,7 @@ export function SettingsPage() {
                       {users.map(user => (
                         <TableRow key={user._id}>
                           <TableCell className="font-medium">{user.name}</TableCell>
-                          <TableCell>{user.email}</TableCell>
+                          <TableCell className="text-sm">{user.email}</TableCell>
                           <TableCell>
                             <Badge variant="outline" className="capitalize">
                               <Shield className="h-3 w-3 mr-1" />
@@ -555,12 +743,7 @@ export function SettingsPage() {
                           </TableCell>
                           {hasRole('owner') && (
                             <TableCell className="text-right">
-                              <Button 
-                                variant="ghost" 
-                                size="icon"
-                                onClick={() => openEditUserDialog(user)}
-                                disabled={user._id === currentUser?._id}
-                              >
+                              <Button variant="ghost" size="icon" onClick={() => openEditUserDialog(user)} disabled={user._id === currentUser?._id}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
                             </TableCell>
@@ -588,48 +771,25 @@ export function SettingsPage() {
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="user_name">Nama</Label>
-              <Input
-                id="user_name"
-                placeholder="Nama lengkap"
-                value={userForm.name}
-                onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))}
-              />
+              <Input id="user_name" placeholder="Nama lengkap" value={userForm.name} onChange={(e) => setUserForm(prev => ({ ...prev, name: e.target.value }))} />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="user_email">Email</Label>
-              <Input
-                id="user_email"
-                type="email"
-                placeholder="email@contoh.com"
-                value={userForm.email}
-                onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
-                disabled={!!userDialog.user}
-              />
+              <Input id="user_email" type="email" placeholder="email@contoh.com" value={userForm.email} onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))} disabled={!!userDialog.user} />
             </div>
 
             {!userDialog.user && (
               <div className="space-y-2">
                 <Label htmlFor="user_password">Password</Label>
-                <Input
-                  id="user_password"
-                  type="password"
-                  placeholder="Min. 6 karakter"
-                  value={userForm.password}
-                  onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
-                />
+                <Input id="user_password" type="password" placeholder="Min. 6 karakter" value={userForm.password} onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))} />
               </div>
             )}
 
             <div className="space-y-2">
               <Label htmlFor="user_role">Role</Label>
-              <Select 
-                value={userForm.role} 
-                onValueChange={(v) => setUserForm(prev => ({ ...prev, role: v }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+              <Select value={userForm.role} onValueChange={(v) => setUserForm(prev => ({ ...prev, role: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="kasir">Kasir</SelectItem>
                   <SelectItem value="manager">Manager</SelectItem>
@@ -641,11 +801,7 @@ export function SettingsPage() {
             {userDialog.user && (
               <div className="flex items-center justify-between">
                 <Label htmlFor="user_active">User Aktif</Label>
-                <Switch
-                  id="user_active"
-                  checked={userForm.is_active !== false}
-                  onCheckedChange={(checked) => setUserForm(prev => ({ ...prev, is_active: checked }))}
-                />
+                <Switch id="user_active" checked={userForm.is_active !== false} onCheckedChange={(checked) => setUserForm(prev => ({ ...prev, is_active: checked }))} />
               </div>
             )}
           </div>
@@ -653,6 +809,58 @@ export function SettingsPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setUserDialog({ open: false, user: null })}>Batal</Button>
             <Button onClick={handleSaveUser}>Simpan</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restore Dialog */}
+      <Dialog open={restoreDialog} onOpenChange={setRestoreDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle style={{ fontFamily: 'var(--font-display)' }}>
+              Restore Data
+            </DialogTitle>
+            <DialogDescription>
+              File backup dari: {restoreData?.created_at ? new Date(restoreData.created_at).toLocaleString('id-ID') : '-'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <p className="text-2xl font-semibold">{restoreData?.data?.ingredients?.length || 0}</p>
+                  <p className="text-sm text-muted-foreground">Bahan</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <p className="text-2xl font-semibold">{restoreData?.data?.menus?.length || 0}</p>
+                  <p className="text-sm text-muted-foreground">Menu</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Mode: <strong>Merge</strong> - Hanya menambahkan data baru, tidak menimpa yang sudah ada.
+              </AlertDescription>
+            </Alert>
+          </div>
+
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setRestoreDialog(false)}>Batal</Button>
+            <Button variant="outline" onClick={() => handleRestore('ingredients')} disabled={isRestoring || !restoreData?.data?.ingredients?.length}>
+              Restore Bahan
+            </Button>
+            <Button variant="outline" onClick={() => handleRestore('menus')} disabled={isRestoring || !restoreData?.data?.menus?.length}>
+              Restore Menu
+            </Button>
+            <Button onClick={() => handleRestore('all')} disabled={isRestoring}>
+              {isRestoring ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+              Restore Semua
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

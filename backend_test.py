@@ -333,6 +333,105 @@ class KedaiOpsAPITester:
             print(f"   Updated print width: {settings.get('print_width', 'N/A')}")
         return success, response
 
+    def test_rate_limiting(self, email):
+        """Test rate limiting on login endpoint (Phase 4)"""
+        print(f"\n🔍 Testing Rate Limiting (Phase 4)...")
+        print(f"   Attempting 6 failed logins to trigger rate limit...")
+        
+        # Try 6 failed login attempts
+        failed_attempts = 0
+        for i in range(6):
+            url = f"{self.base_url}/api/auth/login"
+            headers = {'Content-Type': 'application/json'}
+            try:
+                response = requests.post(url, json={"email": email, "password": "wrongpassword"}, headers=headers, timeout=10)
+                if response.status_code == 429:
+                    print(f"✅ Rate limit triggered after {i+1} attempts (Status: 429)")
+                    self.tests_run += 1
+                    self.tests_passed += 1
+                    return True
+                elif response.status_code == 401:
+                    failed_attempts += 1
+                    print(f"   Attempt {i+1}: 401 (expected)")
+            except Exception as e:
+                print(f"❌ Error during rate limit test: {str(e)}")
+                self.tests_run += 1
+                return False
+        
+        # If we got here, rate limiting didn't trigger
+        print(f"❌ Rate limiting did not trigger after {failed_attempts} failed attempts")
+        self.tests_run += 1
+        return False
+
+    def test_backup_download(self):
+        """Test backup download endpoint (Phase 4)"""
+        success, response = self.run_test(
+            "Backup Download (Phase 4)",
+            "GET",
+            "api/backup",
+            200
+        )
+        if success:
+            print(f"   Backup data retrieved successfully")
+            # Check if response contains expected keys
+            if isinstance(response, dict):
+                print(f"   Backup version: {response.get('version', 'N/A')}")
+                print(f"   Created at: {response.get('created_at', 'N/A')}")
+                data = response.get('data', {})
+                print(f"   Ingredients: {len(data.get('ingredients', []))}")
+                print(f"   Menus: {len(data.get('menus', []))}")
+                print(f"   Sales: {len(data.get('sales', []))}")
+        return success, response
+
+    def test_restore_ingredients(self, ingredients_data):
+        """Test restore ingredients endpoint (Phase 4)"""
+        success, response = self.run_test(
+            "Restore Ingredients (Phase 4)",
+            "POST",
+            "api/restore/ingredients",
+            200,
+            data=ingredients_data,
+            params={"mode": "merge"}
+        )
+        if success:
+            print(f"   Restored: {response.get('restored', 0)}")
+            print(f"   Skipped: {response.get('skipped', 0)}")
+            print(f"   Message: {response.get('message', 'N/A')}")
+        return success, response
+
+    def test_restore_menus(self, menus_data):
+        """Test restore menus endpoint (Phase 4)"""
+        success, response = self.run_test(
+            "Restore Menus (Phase 4)",
+            "POST",
+            "api/restore/menus",
+            200,
+            data=menus_data,
+            params={"mode": "merge"}
+        )
+        if success:
+            print(f"   Restored: {response.get('restored', 0)}")
+            print(f"   Skipped: {response.get('skipped', 0)}")
+            print(f"   Message: {response.get('message', 'N/A')}")
+        return success, response
+
+    def test_sales_paginated(self, page=1, per_page=20):
+        """Test paginated sales endpoint (Phase 4)"""
+        success, response = self.run_test(
+            f"Sales Paginated (Phase 4) - Page {page}",
+            "GET",
+            "api/sales/paginated",
+            200,
+            params={"page": page, "per_page": per_page}
+        )
+        if success:
+            pagination = response.get('pagination', {})
+            print(f"   Page: {pagination.get('page', 'N/A')}/{pagination.get('total_pages', 'N/A')}")
+            print(f"   Total sales: {pagination.get('total', 0)}")
+            print(f"   Sales on this page: {len(response.get('sales', []))}")
+            print(f"   Has next: {pagination.get('has_next', False)}")
+        return success, response
+
 
 def main():
     print("=" * 60)
@@ -546,6 +645,50 @@ def main():
         "show_logo": False,
         "auto_print": False
     })
+    
+    # Test 16: Phase 4 - Rate Limiting
+    print("\n" + "=" * 60)
+    print("PHASE 12: RATE LIMITING (Phase 4)")
+    print("=" * 60)
+    
+    tester.test_rate_limiting("test@example.com")
+    
+    # Test 17: Phase 4 - Backup/Restore
+    print("\n" + "=" * 60)
+    print("PHASE 13: BACKUP/RESTORE (Phase 4)")
+    print("=" * 60)
+    
+    # Test backup download
+    backup_success, backup_data = tester.test_backup_download()
+    
+    # Test restore with sample data
+    if backup_success and backup_data:
+        # Test restore ingredients with a sample ingredient
+        sample_ingredient = [{
+            "name": "Test Ingredient Restore",
+            "unit": "gram",
+            "stock_qty": 100,
+            "low_stock_threshold": 10,
+            "price_per_unit": 1000
+        }]
+        tester.test_restore_ingredients(sample_ingredient)
+        
+        # Test restore menus with a sample menu
+        sample_menu = [{
+            "name": "Test Menu Restore",
+            "category": "Test",
+            "price": 15000,
+            "recipe": [],
+            "is_active": True
+        }]
+        tester.test_restore_menus(sample_menu)
+    
+    # Test 18: Phase 4 - Pagination
+    print("\n" + "=" * 60)
+    print("PHASE 14: PAGINATION (Phase 4)")
+    print("=" * 60)
+    
+    tester.test_sales_paginated(page=1, per_page=10)
     
     # Final Summary
     print("\n" + "=" * 60)

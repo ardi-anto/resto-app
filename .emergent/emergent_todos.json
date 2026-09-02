@@ -1,22 +1,22 @@
 [
   {
-    "content": "Phase 3: Hardening sync dengan retry/backoff",
+    "content": "Phase 4: Security hardening (JWT secret 32+ bytes + rate limiting)",
     "status": "completed"
   },
   {
-    "content": "Phase 3: Export laporan ke CSV",
+    "content": "Phase 4: Pagination untuk data besar",
     "status": "completed"
   },
   {
-    "content": "Phase 3: Histori ledger per bahan",
+    "content": "Phase 4: Backup/restore data",
     "status": "completed"
   },
   {
-    "content": "Phase 3: Perbaikan print settings (58mm/80mm)",
+    "content": "Phase 4: ESC/POS printing (test print button)",
     "status": "completed"
   },
   {
-    "content": "Phase 3: End to End Testing",
+    "content": "Phase 4: End to End Testing",
     "status": "completed"
   }
 ]

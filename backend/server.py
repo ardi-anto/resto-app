@@ -1,22 +1,30 @@
 """
 KedaiOps - Coffee Shop POS & Stock Management API
+Phase 4: Security Hardening + Pagination + Backup/Restore
 """
 import os
 import io
 import csv
 import jwt
+import json
 import bcrypt
+import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 from contextlib import asynccontextmanager
+from collections import defaultdict
+import time
 
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from bson import ObjectId
+
+from pydantic import BaseModel
+from typing import List, Any
 
 from models import (
     serialize_doc,
@@ -27,13 +35,32 @@ from models import (
     StoreSettings
 )
 
+# Restore request models
+class RestoreIngredientsRequest(BaseModel):
+    ingredients: List[dict]
+
+class RestoreMenusRequest(BaseModel):
+    menus: List[dict]
+
 load_dotenv()
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.getenv("DB_NAME", "kedaiops")
-JWT_SECRET = os.getenv("JWT_SECRET", "kedaiops-secret-key-2024")
+
+# Security: Use env variable or generate secure secret
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET or len(JWT_SECRET) < 32:
+    # Generate a secure secret if not provided or too short
+    JWT_SECRET = secrets.token_hex(32)
+    print(f"WARNING: Using auto-generated JWT_SECRET. Set JWT_SECRET env variable for production.")
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 24
+
+# Rate limiting for login (simple in-memory)
+login_attempts = defaultdict(list)
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300  # 5 minutes
 
 # Database connection
 db_client: Optional[AsyncIOMotorClient] = None
@@ -88,6 +115,19 @@ security = HTTPBearer(auto_error=False)
 
 
 # ============ AUTH HELPERS ============
+def check_rate_limit(identifier: str) -> bool:
+    """Check if login attempts exceed rate limit"""
+    now = time.time()
+    # Clean old attempts
+    login_attempts[identifier] = [t for t in login_attempts[identifier] if now - t < LOGIN_WINDOW_SECONDS]
+    return len(login_attempts[identifier]) < MAX_LOGIN_ATTEMPTS
+
+
+def record_login_attempt(identifier: str):
+    """Record a login attempt"""
+    login_attempts[identifier].append(time.time())
+
+
 def create_token(user_id: str, email: str, role: str) -> str:
     payload = {
         "sub": user_id,
@@ -145,12 +185,21 @@ async def health():
 
 # ============ AUTH ENDPOINTS ============
 @app.post("/api/auth/login")
-async def login(data: UserLogin):
+async def login(data: UserLogin, request: Request):
+    # Rate limiting
+    client_ip = request.client.host if request.client else "unknown"
+    identifier = f"{client_ip}:{data.email}"
+    
+    if not check_rate_limit(identifier):
+        raise HTTPException(429, "Terlalu banyak percobaan login. Coba lagi dalam 5 menit.")
+    
     user = await db.users.find_one({"email": data.email})
     if not user:
+        record_login_attempt(identifier)
         raise HTTPException(401, "Email atau password salah")
     
     if not bcrypt.checkpw(data.password.encode(), user["password"].encode()):
+        record_login_attempt(identifier)
         raise HTTPException(401, "Email atau password salah")
     
     if not user.get("is_active", True):
@@ -511,6 +560,52 @@ async def list_sales(
     }
 
 
+@app.get("/api/sales/paginated")
+async def list_sales_paginated(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    user: dict = Depends(require_role("owner", "manager"))
+):
+    """Paginated sales list with search"""
+    query = {}
+    
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date)}
+    
+    if search:
+        # Search in client_id or items.menu_name
+        query["$or"] = [
+            {"client_id": {"$regex": search, "$options": "i"}},
+            {"items.menu_name": {"$regex": search, "$options": "i"}}
+        ]
+    
+    total = await db.sales.count_documents(query)
+    total_pages = (total + per_page - 1) // per_page
+    
+    skip = (page - 1) * per_page
+    sales = await db.sales.find(query).sort("created_at", -1).skip(skip).limit(per_page).to_list(per_page)
+    
+    return {
+        "sales": serialize_doc(sales),
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
+
+
 @app.get("/api/sales/{sale_id}")
 async def get_sale(sale_id: str):
     sale = await db.sales.find_one({"_id": ObjectId(sale_id)})
@@ -850,6 +945,203 @@ async def export_usage_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
+
+# ============ BACKUP/RESTORE ENDPOINTS ============
+@app.get("/api/backup")
+async def backup_data(user: dict = Depends(require_role("owner"))):
+    """Export all data as JSON for backup"""
+    backup = {
+        "version": "1.0",
+        "created_at": datetime.utcnow().isoformat(),
+        "created_by": user["email"],
+        "data": {}
+    }
+    
+    # Export ingredients
+    ingredients = await db.ingredients.find().to_list(10000)
+    backup["data"]["ingredients"] = serialize_doc(ingredients)
+    
+    # Export menus
+    menus = await db.menus.find().to_list(10000)
+    backup["data"]["menus"] = serialize_doc(menus)
+    
+    # Export sales (last 90 days)
+    ninety_days_ago = datetime.utcnow() - timedelta(days=90)
+    sales = await db.sales.find({"created_at": {"$gte": ninety_days_ago}}).to_list(50000)
+    backup["data"]["sales"] = serialize_doc(sales)
+    
+    # Export stock ledger (last 90 days)
+    ledger = await db.stock_ledger.find({"created_at": {"$gte": ninety_days_ago}}).to_list(100000)
+    backup["data"]["stock_ledger"] = serialize_doc(ledger)
+    
+    # Export settings
+    settings = await db.settings.find_one({"type": "store"})
+    backup["data"]["settings"] = serialize_doc(settings) if settings else None
+    
+    # Export users (without passwords)
+    users = await db.users.find({}, {"password": 0}).to_list(100)
+    backup["data"]["users"] = serialize_doc(users)
+    
+    # Create JSON response
+    json_str = json.dumps(backup, indent=2, ensure_ascii=False, default=str)
+    
+    filename = f"kedaiops_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    return StreamingResponse(
+        iter([json_str]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.post("/api/restore")
+async def restore_data(
+    restore_ingredients: bool = True,
+    restore_menus: bool = True,
+    restore_settings: bool = True,
+    user: dict = Depends(require_role("owner"))
+):
+    """
+    Restore data from backup JSON (uploaded as request body)
+    Note: Sales and ledger are NOT restored to prevent duplication
+    """
+    # This endpoint expects the backup JSON to be sent as request body
+    # For simplicity, we'll use a simpler approach - restore from uploaded data
+    raise HTTPException(501, "Restore endpoint requires file upload. Use /api/restore/preview first.")
+
+
+@app.post("/api/restore/ingredients")
+async def restore_ingredients_endpoint(
+    data: RestoreIngredientsRequest,
+    mode: str = Query("merge", regex="^(merge|replace)$"),
+    user: dict = Depends(require_role("owner"))
+):
+    """Restore ingredients from backup data"""
+    ingredients = data.ingredients
+    if mode == "replace":
+        # Check if any menu uses these ingredients
+        menus = await db.menus.find({"recipe.0": {"$exists": True}}).to_list(1)
+        if menus:
+            raise HTTPException(400, "Tidak bisa replace ingredients karena ada menu dengan resep")
+        await db.ingredients.delete_many({})
+    
+    restored = 0
+    skipped = 0
+    
+    for ing in ingredients:
+        # Remove _id for insert
+        ing_data = {k: v for k, v in ing.items() if k != "_id"}
+        ing_data["created_at"] = datetime.utcnow()
+        ing_data["updated_at"] = datetime.utcnow()
+        
+        # Check if exists
+        existing = await db.ingredients.find_one({"name": ing_data["name"]})
+        if existing:
+            if mode == "merge":
+                # Update stock if higher
+                if ing_data.get("stock_qty", 0) > existing.get("stock_qty", 0):
+                    await db.ingredients.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {"stock_qty": ing_data["stock_qty"], "updated_at": datetime.utcnow()}}
+                    )
+                    restored += 1
+                else:
+                    skipped += 1
+            else:
+                skipped += 1
+        else:
+            await db.ingredients.insert_one(ing_data)
+            restored += 1
+    
+    return {
+        "message": f"Restore selesai. {restored} ditambahkan/diperbarui, {skipped} dilewati.",
+        "restored": restored,
+        "skipped": skipped
+    }
+
+
+@app.post("/api/restore/menus")
+async def restore_menus_endpoint(
+    data: RestoreMenusRequest,
+    mode: str = Query("merge", regex="^(merge|replace)$"),
+    user: dict = Depends(require_role("owner"))
+):
+    """Restore menus from backup data"""
+    menus = data.menus
+    if mode == "replace":
+        await db.menus.delete_many({})
+    
+    restored = 0
+    skipped = 0
+    
+    for menu in menus:
+        # Remove _id for insert
+        menu_data = {k: v for k, v in menu.items() if k != "_id"}
+        menu_data["created_at"] = datetime.utcnow()
+        menu_data["updated_at"] = datetime.utcnow()
+        
+        # Check if exists
+        existing = await db.menus.find_one({"name": menu_data["name"]})
+        if existing:
+            if mode == "merge":
+                skipped += 1
+            else:
+                skipped += 1
+        else:
+            await db.menus.insert_one(menu_data)
+            restored += 1
+    
+    return {
+        "message": f"Restore selesai. {restored} ditambahkan, {skipped} dilewati.",
+        "restored": restored,
+        "skipped": skipped
+    }
+
+
+@app.get("/api/stock-ledger/paginated")
+async def list_ledger_paginated(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+    ingredient_id: Optional[str] = None,
+    type_filter: Optional[str] = None,
+    days: int = Query(30, le=365),
+    user: dict = Depends(require_role("owner", "manager"))
+):
+    """Paginated stock ledger with filters"""
+    start_date = datetime.utcnow() - timedelta(days=days)
+    query = {"created_at": {"$gte": start_date}}
+    
+    if ingredient_id:
+        query["ingredient_id"] = ingredient_id
+    if type_filter:
+        query["type"] = type_filter
+    
+    total = await db.stock_ledger.count_documents(query)
+    total_pages = (total + per_page - 1) // per_page
+    
+    skip = (page - 1) * per_page
+    ledger = await db.stock_ledger.find(query).sort("created_at", -1).skip(skip).limit(per_page).to_list(per_page)
+    
+    # Enrich with ingredient names
+    for entry in ledger:
+        ing_id = entry.get("ingredient_id")
+        if ing_id:
+            ing = await db.ingredients.find_one({"_id": ObjectId(ing_id)})
+            if ing:
+                entry["ingredient_name"] = ing["name"]
+                entry["ingredient_unit"] = ing["unit"]
+    
+    return {
+        "ledger": serialize_doc(ledger),
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        }
+    }
 
 
 if __name__ == "__main__":
