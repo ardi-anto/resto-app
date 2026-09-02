@@ -1,0 +1,117 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Coffee-warm theme */
+    --background: 36 33% 98%;
+    --foreground: 24 18% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 24 18% 12%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 24 18% 12%;
+    --primary: 22 45% 22%;
+    --primary-foreground: 36 33% 98%;
+    --secondary: 32 28% 94%;
+    --secondary-foreground: 24 18% 12%;
+    --muted: 32 22% 93%;
+    --muted-foreground: 24 10% 40%;
+    --accent: 174 45% 34%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 52%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 28 18% 86%;
+    --input: 28 18% 86%;
+    --ring: 174 45% 34%;
+    --radius: 0.75rem;
+    
+    /* Chart colors */
+    --chart-1: 22 55% 45%;
+    --chart-2: 174 45% 34%;
+    --chart-3: 38 70% 55%;
+    --chart-4: 12 65% 55%;
+    --chart-5: 210 35% 45%;
+    
+    /* Semantic colors */
+    --success-bg: 142 52% 92%;
+    --success-fg: 142 45% 22%;
+    --success-border: 142 35% 80%;
+    --warning-bg: 38 90% 92%;
+    --warning-fg: 28 70% 22%;
+    --warning-border: 38 55% 80%;
+    --danger-bg: 0 85% 94%;
+    --danger-fg: 0 65% 30%;
+    --danger-border: 0 55% 84%;
+    --info-bg: 210 70% 94%;
+    --info-fg: 210 55% 28%;
+    --info-border: 210 45% 84%;
+    
+    /* Fonts */
+    --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-body: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .dark {
+    --background: 24 18% 8%;
+    --foreground: 36 33% 96%;
+    --card: 24 18% 10%;
+    --card-foreground: 36 33% 96%;
+    --primary: 38 70% 55%;
+    --primary-foreground: 24 18% 10%;
+    --accent: 174 45% 40%;
+    --accent-foreground: 24 18% 10%;
+    --border: 24 12% 18%;
+    --ring: 38 70% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-body);
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer utilities {
+  .bg-noise {
+    background-image: radial-gradient(rgba(0,0,0,0.035) 1px, transparent 1px);
+    background-size: 3px 3px;
+  }
+  
+  .shadow-soft {
+    box-shadow: 0 10px 30px rgba(24, 18, 12, 0.08);
+  }
+  
+  .shadow-lift {
+    box-shadow: 0 14px 40px rgba(24, 18, 12, 0.12);
+  }
+  
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Print styles for receipt */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .receipt-print, .receipt-print * {
+    visibility: visible;
+  }
+  .receipt-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+  }
+}

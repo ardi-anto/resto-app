@@ -1,0 +1,34 @@
+[
+  {
+    "content": "Phase 1: Core POC - Buat test script untuk validasi recipe-stock deduction + idempotency",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 1: Core POC - Jalankan test dan fix sampai berhasil",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 1: Core POC - Validasi offline/sync logic design",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: V1 App - Design Agent untuk UI guidelines",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: V1 App - Backend Implementation (CRUD + Sync + Reports)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: V1 App - Frontend Implementation (PWA + POS + Offline)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: V1 App - End to End Testing",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: All user stories covered in Development and testing",
+    "status": "completed"
+  }
+]
