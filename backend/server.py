@@ -77,6 +77,12 @@ async def lifespan(app: FastAPI):
     
     # Create indexes
     await db.ingredients.create_index("name")
+    # Try to create unique index for name+unit, but don't fail if duplicates exist
+    try:
+        await db.ingredients.create_index([("name", 1), ("unit", 1)], unique=True, 
+            collation={"locale": "en", "strength": 2})  # Case-insensitive unique index
+    except Exception as e:
+        print(f"Warning: Could not create unique index on ingredients (name, unit) - may have duplicates: {e}")
     await db.menus.create_index("name")
     await db.menus.create_index("category")
     await db.sales.create_index("client_id", unique=True)
@@ -485,6 +491,14 @@ async def list_ingredients(low_stock_only: bool = False):
 
 @app.post("/api/ingredients")
 async def create_ingredient(data: IngredientCreate, user: dict = Depends(require_permission("ingredient.create"))):
+    # Check for duplicate name + unit combination
+    existing = await db.ingredients.find_one({
+        "name": {"$regex": f"^{data.name}$", "$options": "i"},  # Case-insensitive
+        "unit": {"$regex": f"^{data.unit}$", "$options": "i"}
+    })
+    if existing:
+        raise HTTPException(400, f"Bahan '{data.name}' dengan satuan '{data.unit}' sudah ada")
+    
     ingredient = {
         **data.model_dump(),
         "created_at": datetime.utcnow(),
@@ -500,6 +514,21 @@ async def update_ingredient(ingredient_id: str, data: IngredientUpdate, user: di
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(400, "No data to update")
+    
+    # If name or unit is being updated, check for duplicates
+    if "name" in update_data or "unit" in update_data:
+        current = await db.ingredients.find_one({"_id": ObjectId(ingredient_id)})
+        if current:
+            check_name = update_data.get("name", current["name"])
+            check_unit = update_data.get("unit", current["unit"])
+            
+            existing = await db.ingredients.find_one({
+                "_id": {"$ne": ObjectId(ingredient_id)},  # Exclude current ingredient
+                "name": {"$regex": f"^{check_name}$", "$options": "i"},
+                "unit": {"$regex": f"^{check_unit}$", "$options": "i"}
+            })
+            if existing:
+                raise HTTPException(400, f"Bahan '{check_name}' dengan satuan '{check_unit}' sudah ada")
     
     update_data["updated_at"] = datetime.utcnow()
     result = await db.ingredients.update_one({"_id": ObjectId(ingredient_id)}, {"$set": update_data})
