@@ -9,6 +9,8 @@ import jwt
 import json
 import bcrypt
 import secrets
+import base64
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 from contextlib import asynccontextmanager
@@ -18,7 +20,7 @@ import time
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -43,6 +45,11 @@ class RestoreIngredientsRequest(BaseModel):
 
 class RestoreMenusRequest(BaseModel):
     menus: List[dict]
+
+# Image upload model
+class ImageUploadRequest(BaseModel):
+    image_data: str  # Base64 encoded image
+    filename: Optional[str] = None
 
 load_dotenv()
 
@@ -660,6 +667,93 @@ async def delete_menu(menu_id: str, user: dict = Depends(require_permission("men
     if result.deleted_count == 0:
         raise HTTPException(404, "Menu tidak ditemukan")
     return {"message": "Menu dihapus"}
+
+
+# ============ IMAGE UPLOAD ENDPOINTS ============
+@app.post("/api/upload/image")
+async def upload_image(data: ImageUploadRequest, user: dict = Depends(get_current_user)):
+    """
+    Upload image as base64, store in MongoDB, return URL
+    Max size: ~2MB after base64 encoding
+    """
+    try:
+        # Validate and parse base64 data
+        image_data = data.image_data
+        
+        # Handle data URL format (data:image/png;base64,...)
+        if ',' in image_data:
+            header, image_data = image_data.split(',', 1)
+            # Extract mime type
+            mime_type = header.split(':')[1].split(';')[0] if ':' in header else 'image/jpeg'
+        else:
+            mime_type = 'image/jpeg'
+        
+        # Decode to validate
+        try:
+            decoded = base64.b64decode(image_data)
+        except Exception:
+            raise HTTPException(400, "Format base64 tidak valid")
+        
+        # Check size (max ~2MB)
+        if len(decoded) > 2 * 1024 * 1024:
+            raise HTTPException(400, "Ukuran gambar maksimal 2MB")
+        
+        # Generate unique ID
+        image_id = str(uuid.uuid4())
+        
+        # Store in MongoDB
+        image_doc = {
+            "_id": image_id,
+            "data": image_data,
+            "mime_type": mime_type,
+            "filename": data.filename or f"{image_id}.jpg",
+            "size": len(decoded),
+            "uploaded_by": user.get("email"),
+            "created_at": datetime.utcnow()
+        }
+        await db.images.insert_one(image_doc)
+        
+        # Return URL to access the image
+        return {
+            "image_id": image_id,
+            "url": f"/api/images/{image_id}",
+            "size": len(decoded)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, f"Gagal upload gambar: {str(e)}")
+
+
+@app.get("/api/images/{image_id}")
+async def get_image(image_id: str):
+    """Serve uploaded image by ID"""
+    image = await db.images.find_one({"_id": image_id})
+    if not image:
+        raise HTTPException(404, "Gambar tidak ditemukan")
+    
+    try:
+        decoded = base64.b64decode(image["data"])
+        return Response(
+            content=decoded,
+            media_type=image.get("mime_type", "image/jpeg"),
+            headers={
+                "Cache-Control": "public, max-age=31536000",  # Cache for 1 year
+                "Content-Disposition": f"inline; filename={image.get('filename', 'image.jpg')}"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Gagal mengambil gambar: {str(e)}")
+
+
+@app.delete("/api/images/{image_id}")
+async def delete_image(image_id: str, user: dict = Depends(get_current_user)):
+    """Delete an uploaded image"""
+    result = await db.images.delete_one({"_id": image_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Gambar tidak ditemukan")
+    return {"message": "Gambar dihapus"}
 
 
 # ============ SALES ENDPOINTS ============

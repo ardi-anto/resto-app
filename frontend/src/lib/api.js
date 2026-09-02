@@ -124,4 +124,11 @@ export const permissionsAPI = {
   list: () => api.get('/api/permissions'),
 };
 
+// Image Upload
+export const uploadAPI = {
+  uploadImage: (imageData, filename) => 
+    api.post('/api/upload/image', { image_data: imageData, filename }),
+  deleteImage: (imageId) => api.delete(`/api/images/${imageId}`),
+};
+
 export default api;

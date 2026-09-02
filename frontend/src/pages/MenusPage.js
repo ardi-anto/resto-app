@@ -2,7 +2,7 @@
  * Menu Management Page
  */
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Pencil, Trash2, Search, Coffee, Loader2, X, ChevronDown, Image, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Coffee, Loader2, X, ChevronDown, Image, Upload, ImagePlus } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -16,12 +16,15 @@ import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../components/ui/collapsible';
-import { menusAPI, ingredientsAPI } from '../lib/api';
+import { menusAPI, ingredientsAPI, uploadAPI } from '../lib/api';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
 // Default categories
 const DEFAULT_CATEGORIES = ['Umum', 'Kopi', 'Non-Kopi', 'Makanan', 'Snack'];
+
+// Backend URL for image display
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || '';
 
 export function MenusPage() {
   const [menus, setMenus] = useState([]);
@@ -43,10 +46,15 @@ export function MenusPage() {
     recipe: []
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef(null);
   
   // Custom category state
   const [showCustomCategory, setShowCustomCategory] = useState(false);
   const [customCategory, setCustomCategory] = useState('');
+  
+  // Image preview (for local preview before upload)
+  const [imagePreview, setImagePreview] = useState(null);
   
   // Delete dialog
   const [deleteDialog, setDeleteDialog] = useState({ open: false, menu: null });
@@ -96,6 +104,7 @@ export function MenusPage() {
     });
     setShowCustomCategory(false);
     setCustomCategory('');
+    setImagePreview(null);
     setIsFormOpen(true);
   };
 
@@ -168,6 +177,65 @@ export function MenusPage() {
       setCustomCategory('');
       setFormData(prev => ({ ...prev, category: value }));
     }
+  };
+
+  // Image upload handling
+  const handleFileSelect = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error('File harus berupa gambar');
+      return;
+    }
+
+    // Validate size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error('Ukuran gambar maksimal 2MB');
+      return;
+    }
+
+    // Create preview
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64Data = e.target.result;
+      setImagePreview(base64Data);
+
+      // Upload to backend
+      setIsUploading(true);
+      try {
+        const response = await uploadAPI.uploadImage(base64Data, file.name);
+        const imageUrl = `${BACKEND_URL}${response.data.url}`;
+        setFormData(prev => ({ ...prev, image_url: imageUrl }));
+        toast.success('Gambar berhasil diupload');
+      } catch (error) {
+        console.error('Upload error:', error);
+        toast.error('Gagal upload gambar');
+        setImagePreview(null);
+      } finally {
+        setIsUploading(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveImage = () => {
+    setFormData(prev => ({ ...prev, image_url: '' }));
+    setImagePreview(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  // Get display image URL (handle both uploaded and external URLs)
+  const getImageUrl = (url) => {
+    if (!url) return null;
+    // If it's a relative URL from our backend, prepend backend URL
+    if (url.startsWith('/api/images/')) {
+      return `${BACKEND_URL}${url}`;
+    }
+    return url;
   };
 
   const handleDelete = async () => {
@@ -371,39 +439,78 @@ export function MenusPage() {
 
           <ScrollArea className="h-[calc(100vh-180px)] pr-4">
             <div className="space-y-4 py-4">
-              {/* Image Preview & URL */}
+              {/* Image Upload */}
               <div className="space-y-2">
                 <Label>Gambar Menu</Label>
                 <div className="flex gap-3">
-                  <div className="w-24 h-24 bg-secondary rounded-lg flex items-center justify-center overflow-hidden border-2 border-dashed border-border">
-                    {formData.image_url ? (
-                      <img 
-                        src={formData.image_url} 
-                        alt="Preview" 
-                        className="w-full h-full object-cover"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                          e.target.nextSibling.style.display = 'flex';
-                        }}
-                      />
-                    ) : null}
-                    <div className={cn(
-                      "flex flex-col items-center justify-center text-muted-foreground",
-                      formData.image_url && "hidden"
-                    )}>
-                      <Image className="h-8 w-8 mb-1 opacity-50" />
-                      <span className="text-xs">No Image</span>
-                    </div>
+                  <div className="relative w-24 h-24 bg-secondary rounded-lg flex items-center justify-center overflow-hidden border-2 border-dashed border-border group">
+                    {(imagePreview || formData.image_url) ? (
+                      <>
+                        <img 
+                          src={imagePreview || getImageUrl(formData.image_url)} 
+                          alt="Preview" 
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.target.style.display = 'none';
+                          }}
+                        />
+                        {/* Remove button overlay */}
+                        <button
+                          type="button"
+                          onClick={handleRemoveImage}
+                          className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center"
+                        >
+                          <X className="h-6 w-6 text-white" />
+                        </button>
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-muted-foreground">
+                        <Image className="h-8 w-8 mb-1 opacity-50" />
+                        <span className="text-xs">No Image</span>
+                      </div>
+                    )}
+                    {isUploading && (
+                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                        <Loader2 className="h-6 w-6 text-white animate-spin" />
+                      </div>
+                    )}
                   </div>
                   <div className="flex-1 space-y-2">
-                    <Input
-                      placeholder="URL gambar (https://...)"
-                      value={formData.image_url}
-                      onChange={(e) => setFormData(prev => ({ ...prev, image_url: e.target.value }))}
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileSelect}
+                      className="hidden"
                     />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? (
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      ) : (
+                        <ImagePlus className="h-4 w-4 mr-2" />
+                      )}
+                      {isUploading ? 'Mengupload...' : 'Upload Gambar'}
+                    </Button>
                     <p className="text-xs text-muted-foreground">
-                      Masukkan URL gambar dari internet atau kosongkan untuk menggunakan ikon default
+                      Format: JPG, PNG, WEBP. Maks 2MB.
                     </p>
+                    {/* Optional URL input */}
+                    <Input
+                      placeholder="Atau masukkan URL gambar..."
+                      value={formData.image_url}
+                      onChange={(e) => {
+                        setFormData(prev => ({ ...prev, image_url: e.target.value }));
+                        setImagePreview(null);
+                      }}
+                      className="text-xs"
+                    />
                   </div>
                 </div>
               </div>
