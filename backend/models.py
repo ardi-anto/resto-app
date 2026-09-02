@@ -125,7 +125,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     name: str
-    role: str = "kasir"  # owner, manager, kasir
+    role_id: Optional[str] = None  # Custom role ID, if None uses default
 
 
 class UserLogin(BaseModel):
@@ -135,8 +135,109 @@ class UserLogin(BaseModel):
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
-    role: Optional[str] = None
+    role_id: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+# ============ ROLE & PERMISSION MODELS ============
+# Define all available permissions
+AVAILABLE_PERMISSIONS = {
+    # Page Access
+    "page.pos": "Akses Halaman POS",
+    "page.menus": "Akses Halaman Menu",
+    "page.ingredients": "Akses Halaman Bahan/Stok",
+    "page.reports": "Akses Halaman Laporan",
+    "page.sales_history": "Akses Riwayat Transaksi",
+    "page.settings": "Akses Pengaturan",
+    
+    # POS Actions
+    "pos.create_sale": "Buat Transaksi POS",
+    "pos.void_sale": "Void/Batalkan Transaksi",
+    "pos.apply_discount": "Beri Diskon",
+    
+    # Menu Management
+    "menu.view": "Lihat Menu",
+    "menu.create": "Tambah Menu",
+    "menu.edit": "Edit Menu",
+    "menu.delete": "Hapus Menu",
+    
+    # Ingredient/Stock Management
+    "ingredient.view": "Lihat Bahan/Stok",
+    "ingredient.create": "Tambah Bahan",
+    "ingredient.edit": "Edit Bahan",
+    "ingredient.delete": "Hapus Bahan",
+    "ingredient.adjust_stock": "Sesuaikan Stok",
+    "ingredient.view_ledger": "Lihat Histori Stok",
+    
+    # Reports
+    "report.view_summary": "Lihat Ringkasan",
+    "report.view_sales": "Lihat Laporan Penjualan",
+    "report.view_usage": "Lihat Pemakaian Bahan",
+    "report.export": "Export Laporan",
+    
+    # Settings
+    "settings.store": "Pengaturan Toko",
+    "settings.print": "Pengaturan Cetak",
+    "settings.sync": "Pengaturan Sinkronisasi",
+    "settings.backup": "Backup & Restore",
+    
+    # User Management
+    "user.view": "Lihat Daftar User",
+    "user.create": "Tambah User",
+    "user.edit": "Edit User",
+    "user.delete": "Nonaktifkan User",
+    
+    # Role Management
+    "role.view": "Lihat Daftar Role",
+    "role.create": "Tambah Role",
+    "role.edit": "Edit Role",
+    "role.delete": "Hapus Role",
+}
+
+# Permission categories for UI grouping
+PERMISSION_CATEGORIES = {
+    "Akses Halaman": ["page.pos", "page.menus", "page.ingredients", "page.reports", "page.sales_history", "page.settings"],
+    "POS / Kasir": ["pos.create_sale", "pos.void_sale", "pos.apply_discount"],
+    "Menu": ["menu.view", "menu.create", "menu.edit", "menu.delete"],
+    "Bahan & Stok": ["ingredient.view", "ingredient.create", "ingredient.edit", "ingredient.delete", "ingredient.adjust_stock", "ingredient.view_ledger"],
+    "Laporan": ["report.view_summary", "report.view_sales", "report.view_usage", "report.export"],
+    "Pengaturan": ["settings.store", "settings.print", "settings.sync", "settings.backup"],
+    "User": ["user.view", "user.create", "user.edit", "user.delete"],
+    "Role": ["role.view", "role.create", "role.edit", "role.delete"],
+}
+
+# Default role permissions
+DEFAULT_ROLE_PERMISSIONS = {
+    "owner": list(AVAILABLE_PERMISSIONS.keys()),  # All permissions
+    "manager": [
+        "page.pos", "page.menus", "page.ingredients", "page.reports", "page.sales_history", "page.settings",
+        "pos.create_sale", "pos.apply_discount",
+        "menu.view", "menu.create", "menu.edit",
+        "ingredient.view", "ingredient.create", "ingredient.edit", "ingredient.adjust_stock", "ingredient.view_ledger",
+        "report.view_summary", "report.view_sales", "report.view_usage", "report.export",
+        "settings.store", "settings.print", "settings.sync",
+        "user.view",
+    ],
+    "kasir": [
+        "page.pos",
+        "pos.create_sale",
+        "menu.view",
+        "ingredient.view",
+    ],
+}
+
+
+class RoleCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    permissions: List[str] = []
+    is_system: bool = False  # System roles (owner, manager, kasir) cannot be deleted
+
+
+class RoleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    permissions: Optional[List[str]] = None
 
 
 # ============ SETTINGS MODELS ============

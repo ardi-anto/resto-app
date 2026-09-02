@@ -17,6 +17,7 @@ import { IngredientsPage } from './pages/IngredientsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { SalesHistoryPage } from './pages/SalesHistoryPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { RolesPage } from './pages/RolesPage';
 
 import './App.css';
 
@@ -29,9 +30,9 @@ const queryClient = new QueryClient({
   },
 });
 
-// Protected Route Component
-function ProtectedRoute({ children, roles }) {
-  const { user, loading } = useAuth();
+// Protected Route Component with permission-based access
+function ProtectedRoute({ children, permission }) {
+  const { user, loading, hasPermission } = useAuth();
 
   if (loading) {
     return (
@@ -45,7 +46,8 @@ function ProtectedRoute({ children, roles }) {
     return <Navigate to="/login" replace />;
   }
 
-  if (roles && !roles.includes(user.role)) {
+  // Check permission if specified
+  if (permission && !hasPermission(permission)) {
     return <Navigate to="/pos" replace />;
   }
 
@@ -70,7 +72,7 @@ function AppRoutes() {
         <Route 
           path="menus" 
           element={
-            <ProtectedRoute roles={['owner', 'manager']}>
+            <ProtectedRoute permission="page.menus">
               <MenusPage />
             </ProtectedRoute>
           } 
@@ -78,7 +80,7 @@ function AppRoutes() {
         <Route 
           path="ingredients" 
           element={
-            <ProtectedRoute roles={['owner', 'manager']}>
+            <ProtectedRoute permission="page.ingredients">
               <IngredientsPage />
             </ProtectedRoute>
           } 
@@ -86,7 +88,7 @@ function AppRoutes() {
         <Route 
           path="reports" 
           element={
-            <ProtectedRoute roles={['owner', 'manager']}>
+            <ProtectedRoute permission="page.reports">
               <ReportsPage />
             </ProtectedRoute>
           } 
@@ -94,15 +96,23 @@ function AppRoutes() {
         <Route 
           path="sales" 
           element={
-            <ProtectedRoute roles={['owner', 'manager']}>
+            <ProtectedRoute permission="page.sales_history">
               <SalesHistoryPage />
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="roles" 
+          element={
+            <ProtectedRoute permission="role.view">
+              <RolesPage />
             </ProtectedRoute>
           } 
         />
         <Route 
           path="settings" 
           element={
-            <ProtectedRoute roles={['owner']}>
+            <ProtectedRoute permission="page.settings">
               <SettingsPage />
             </ProtectedRoute>
           } 

@@ -3,12 +3,13 @@
 ## Objectives
 - ✅ **Selesai**: Validasi **core flow** resep → transaksi POS → stok bahan berkurang akurat, bekerja **offline** (IndexedDB/Dexie) dan **sync** ke backend saat online **tanpa duplikasi** (idempotent).
 - ✅ **Selesai**: Bangun MVP **PWA React** + **FastAPI** + **MongoDB** dengan UI **Bahasa Indonesia**, mencakup POS, stok, resep, laporan, sinkronisasi, dan cetak struk.
-- ✅ **Selesai (Phase 3)**: Hardening sinkronisasi (retry/backoff) + audit stok per bahan (ledger history) + export laporan CSV + pengaturan print 58mm/80mm, semuanya lulus test 100%.
+- ✅ **Selesai (Phase 3)**: Hardening sinkronisasi (retry/backoff) + audit stok per bahan (ledger history) + export laporan CSV + pengaturan print 58mm/80mm.
 - ✅ **Selesai (Phase 4)**: Release readiness baseline:
   - Security hardening (JWT secret kuat + rate limit login)
   - Pagination untuk data besar
   - Backup/restore (admin)
   - Printing lebih robust (preview + test print thermal/ESC-POS-style via browser)
+- ✅ **Selesai (Phase 5)**: Implementasi **Custom Roles + Permission Matrix** (kontrol menu & aksi berbasis permission) dan **setup export mobile** (Capacitor) untuk Android/iOS.
 
 ---
 
@@ -91,7 +92,7 @@
     - summary (total revenue, transactions, top menu, low stock list)
     - daily trend
     - ingredient usage dari stock ledger
-  - Auth + RBAC:
+  - Auth + RBAC (awal):
     - JWT login
     - roles: owner/manager/kasir
     - default owner auto-create: admin@kedaiops.com / admin123
@@ -122,43 +123,35 @@
 
 ### Implementation steps (hasil aktual)
 - ✅ Hardening Sync (offline-first):
-  - Upgrade outbox `pendingSales` (Dexie v2) dengan field status + retry metadata.
+  - Upgrade outbox `pendingSales` (Dexie) dengan field status + retry metadata.
   - State machine: `pending → syncing → synced` serta `retrying/failed`.
-  - Implement **retry otomatis** dengan **exponential backoff + jitter** (configurable max retries).
+  - Implement **retry otomatis** dengan **exponential backoff + jitter**.
   - Partial failure handling: transaksi sukses ditandai synced, yang gagal masuk retrying/failed.
-  - UI status sync ditingkatkan:
-    - counts: pending, retrying, failed
-    - actions: retry / delete untuk transaksi failed (di Settings → Sinkronisasi)
+  - UI status sync ditingkatkan.
 - ✅ Export laporan ke CSV:
   - Backend endpoint:
     - `GET /api/reports/export/sales` (CSV)
     - `GET /api/reports/export/ingredients` (CSV)
     - `GET /api/reports/export/usage?days=N` (CSV)
   - Frontend:
-    - Reports page menambahkan tombol **Export** (dropdown 3 opsi), download via blob.
+    - Reports page tombol **Export** (download via blob).
 - ✅ Histori ledger per bahan:
   - Backend endpoint:
     - `GET /api/ingredients/{ingredient_id}/ledger?days=N&limit=M`
-    - Mengembalikan ledger + summary period (sales_usage/restock_total/waste_total) + running balance.
   - Frontend:
-    - Tombol **Histori** di setiap baris bahan → membuka sheet berisi summary + tabel riwayat.
+    - Tombol **Histori** per bahan.
 - ✅ Perbaikan print settings (58mm/80mm):
-  - Store settings diperluas:
-    - `print_width: "58mm" | "80mm"`
-    - `auto_print` (UI toggle)
-  - Settings → tab **Cetak Struk**:
-    - selector lebar kertas + **live receipt preview** yang berubah sesuai pilihan.
+  - Store settings diperluas: `print_width`, `auto_print`.
+  - Settings → tab **Cetak Struk** dengan preview.
 
 ### Testing (hasil aktual)
-- ✅ 100% pass Phase 3:
-  - Backend: 27/27 tests passed
-  - Frontend: semua flow export/ledger/print/sync status terverifikasi
+- ✅ Phase 3 pass (agent-tested).
 
 ### Success criteria (status)
-- ✅ Sync stabil saat jaringan putus-nyambung (retry/backoff, partial failure, no duplication).
+- ✅ Sync stabil saat jaringan putus-nyambung.
 - ✅ Audit trail stok per bahan bisa ditelusuri via UI.
-- ✅ Export laporan berjalan dan sesuai angka di dashboard.
-- ✅ Print settings 58/80mm dapat diatur dan preview sesuai.
+- ✅ Export laporan berjalan.
+- ✅ Print settings 58/80mm dapat diatur.
 
 ---
 
@@ -169,46 +162,144 @@
 1. Sebagai owner, saya ingin backup/restore data agar tidak takut kehilangan data.
 2. Sebagai owner, saya ingin performa tetap cepat walau data banyak (transaksi/histori) dengan pagination.
 3. Sebagai manager, saya ingin pencarian transaksi cepat agar bisa melayani komplain.
-4. Sebagai owner, saya ingin keamanan sistem memadai (secret, token policy, audit) sebelum dipakai produksi.
-5. Sebagai owner, saya ingin opsi printing lebih robust (template final + test print) agar kompatibel dengan thermal printer.
+4. Sebagai owner, saya ingin keamanan sistem memadai sebelum dipakai produksi.
+5. Sebagai owner, saya ingin opsi printing lebih robust.
 
 ### Implementation steps (hasil aktual)
 - ✅ Security hardening:
-  - JWT secret diperkuat (env `JWT_SECRET` ≥ 32 chars; digunakan 64 hex chars di environment saat ini).
-  - Fallback: jika `JWT_SECRET` kosong/terlalu pendek, server auto-generate dan log warning (dev only).
-  - Login rate limiting (in-memory): maksimum **5 percobaan/5 menit** per `IP+email`.
-  - Catatan: karena rate limit in-memory, hasil test bisa terlihat "tidak trigger" bila server restart/worker reload terjadi (expected).
+  - JWT secret via env `JWT_SECRET` (fallback generate jika kosong/terlalu pendek).
+  - Login rate limiting (in-memory).
 - ✅ Data growth & performance:
-  - Endpoint pagination baru:
-    - `GET /api/sales/paginated?page=1&per_page=20&search=...`
-    - `GET /api/stock-ledger/paginated?page=1&per_page=50&ingredient_id=...&type_filter=...&days=...`
-  - Response memuat metadata pagination: `total`, `total_pages`, `has_next`, `has_prev`.
+  - Pagination endpoints:
+    - `GET /api/sales/paginated`
+    - `GET /api/stock-ledger/paginated`
 - ✅ Backup/restore:
-  - `GET /api/backup` (owner only): download JSON backup (ingredients, menus, sales+ledger last 90 days, settings, users tanpa password).
-  - Restore (owner only, merge-by-default):
-    - `POST /api/restore/ingredients?mode=merge|replace` (body: `{ ingredients: [...] }`)
-    - `POST /api/restore/menus?mode=merge|replace` (body: `{ menus: [...] }`)
-  - Catatan desain: transaksi/ledger tidak di-restore via UI untuk menghindari duplikasi.
-- ✅ Printing improvements (ESC/POS opsional via browser):
-  - Settings → tab Cetak memiliki tombol **Test Print**.
-  - Test print membuka popup dengan layout monospace dan `@page size` mengikuti 58mm/80mm.
-  - Ini bukan direct USB ESC/POS driver; ini pendekatan browser print yang kompatibel untuk banyak printer thermal.
+  - `GET /api/backup` (admin) download JSON
+  - Restore master data:
+    - `POST /api/restore/ingredients?mode=merge|replace`
+    - `POST /api/restore/menus?mode=merge|replace`
+- ✅ Printing improvements:
+  - Settings → tombol **Test Print** (browser print).
 
 ### Testing (hasil aktual)
-- ✅ Frontend: 100% fitur Phase 4 tervalidasi.
-- ✅ Backend: endpoint baru berfungsi (backup, restore, paginated).
-- ℹ️ Catatan test rate limit: hasil otomatis bervariasi karena in-memory state dan reloader.
+- ✅ Endpoint baseline berjalan (agent-tested).
 
 ### Success criteria (status)
-- ✅ Security baseline terpenuhi (JWT secret kuat + rate limit login).
-- ✅ Data besar bisa di-handle via pagination endpoint.
-- ✅ Owner bisa backup dan melakukan restore data master (bahan/menu).
-- ✅ Printing punya jalur "test print" yang lebih siap untuk printer thermal.
+- ✅ Security baseline terpenuhi.
+- ✅ Pagination tersedia.
+- ✅ Owner bisa backup & restore master data.
 
 ---
 
-## Phase 5 — Production Hardening (Future / Optional)
-> Setelah baseline Phase 4, phase ini berisi peningkatan untuk skala lebih besar & compliance.
+## Phase 5 — Custom Roles + Permission Matrix + Mobile Export (Capacitor) **(COMPLETED ✅)**
+> Phase 5: user setuju memakai **custom roles** dan **permission matrix** untuk kontrol menu & aksi, serta setup **Capacitor** untuk ekspor SPA menjadi app Android/iOS.
+
+### User stories (Phase 5)
+1. Sebagai owner, saya bisa membuat role custom (mis. Barista, Supervisor) dan mengatur akses per fitur (matrix).
+2. Sebagai owner, saya bisa assign role ke user.
+3. Sebagai kasir/pegawai, saya hanya melihat menu navigasi yang sesuai permission.
+4. Sebagai sistem, endpoint sensitif tetap terlindungi walau user mencoba akses langsung (server-side enforcement).
+5. Sebagai owner, saya bisa menyiapkan project agar SPA dapat diekspor menjadi Android/iOS app (via Capacitor).
+
+### Permission matrix (yang disepakati)
+- Modul: `pos`, `menus`, `ingredients`, `sales_history`, `reports`, `settings`, `users_roles`
+- Level: `none`, `view`, `manage`
+- Implementasi permission code berbasis aksi (lebih granular) dan dikelompokkan per kategori UI:
+  - **Akses Halaman**: `page.pos`, `page.menus`, `page.ingredients`, `page.reports`, `page.sales_history`, `page.settings`
+  - **POS / Kasir**: `pos.create_sale`, `pos.void_sale`, `pos.apply_discount`
+  - **Menu**: `menu.view`, `menu.create`, `menu.edit`, `menu.delete`
+  - **Bahan & Stok**: `ingredient.view`, `ingredient.create`, `ingredient.edit`, `ingredient.delete`, `ingredient.adjust_stock`, `ingredient.view_ledger`
+  - **Laporan**: `report.view_summary`, `report.view_sales`, `report.view_usage`, `report.export`
+  - **Pengaturan**: `settings.store`, `settings.print`, `settings.sync`, `settings.backup`
+  - **User**: `user.view`, `user.create`, `user.edit`, `user.delete`
+  - **Role**: `role.view`, `role.create`, `role.edit`, `role.delete`
+
+### Default roles (hasil aktual)
+- ✅ **Owner**: full access (35 permissions)
+- ✅ **Manager**: akses operasional + laporan (24 permissions)
+- ✅ **Kasir**: POS only minimal (4 permissions: `page.pos`, `pos.create_sale`, `menu.view`, `ingredient.view`)
+
+### Implementation steps (hasil aktual)
+#### 5.1 Backend — model + default roles ✅
+- ✅ `models.py`:
+  - `AVAILABLE_PERMISSIONS`, `PERMISSION_CATEGORIES`, `DEFAULT_ROLE_PERMISSIONS`
+  - `RoleCreate`, `RoleUpdate`
+- ✅ `server.py` lifespan:
+  - index `roles.name`
+  - auto-create system roles: `owner`, `manager`, `kasir`
+
+#### 5.2 Backend — Role CRUD endpoints ✅
+- ✅ Endpoint:
+  - `GET /api/permissions`
+  - `GET /api/roles`
+  - `POST /api/roles`
+  - `GET /api/roles/{role_id}`
+  - `PUT /api/roles/{role_id}`
+  - `DELETE /api/roles/{role_id}` (block bila `is_system=True` dan/atau sedang dipakai user)
+
+#### 5.3 Backend — permission checking middleware/dependency ✅
+- ✅ Implement `require_permission(...)`:
+  - resolve permission dari `user.role_id` → `roles.permissions`
+  - fallback ke `role_name` + `DEFAULT_ROLE_PERMISSIONS` untuk kompatibilitas
+  - return `403` jika tidak punya izin
+- ✅ Proteksi endpoint sensitif (server-side) dengan permission:
+  - Ingredients: create/update/delete/adjust
+  - Menus: create/update/delete
+  - Reports export
+  - Settings update
+  - Backup/restore
+  - Users management
+  - Roles management
+
+#### 5.4 Backend — auth payload & user schema alignment ✅
+- ✅ Login dan `/api/auth/me` mengembalikan:
+  - `role` (role_name), `role_id`, dan `permissions` (effective)
+- ✅ User management menggunakan `role_id` + `role_name`.
+
+#### 5.5 Frontend — auth & permission-aware UI ✅
+- ✅ `AuthContext` menyimpan `permissions` dan helper:
+  - `hasPermission`, `hasAnyPermission`, `hasAllPermissions`, `canAccessPage`, `can(...)`
+- ✅ Routing guard berbasis permission (bukan roles hardcoded).
+- ✅ Navigation menu (AppLayout) tampil sesuai permission user.
+
+#### 5.6 Frontend — Roles management UI ✅
+- ✅ Halaman `RolesPage`:
+  - list roles + jumlah permission
+  - create/edit role dengan **permission matrix UI** (group by category, select all per kategori)
+  - delete role custom (dengan proteksi role masih dipakai)
+
+#### 5.7 Frontend — User management dengan role assignment ✅
+- ✅ Settings → Manajemen Pengguna:
+  - dropdown role menggunakan data dari `/api/roles`
+  - create user via `/api/auth/register` memakai `role_id`
+  - update user memakai `role_id`
+
+#### 5.8 Capacitor setup ✅
+- ✅ Capacitor v6 dipasang (kompatibel Node 20):
+  - `@capacitor/core@6`, `@capacitor/cli@6`, `@capacitor/android@6`, `@capacitor/ios@6`
+- ✅ `capacitor.config.json` dibuat dengan `webDir: build`
+- ✅ Dokumentasi build mobile: `frontend/MOBILE_BUILD.md`
+- ℹ️ Catatan:
+  - Setup project sudah siap; build APK butuh Android Studio.
+  - Build iOS butuh macOS + Xcode.
+
+### Testing (Phase 5)
+- ✅ Backend API testing + permission enforcement
+- ✅ Frontend UI validation:
+  - RolesPage muncul dan permission matrix dialog berfungsi
+  - Menu navigasi hide/show sesuai permission
+- ✅ E2E testing: Phase 5 features **100% working** (agent-tested)
+
+### Success criteria (Phase 5)
+- ✅ Owner dapat membuat role custom dan mengatur permission.
+- ✅ UI menu & aksi mengikuti permission matrix.
+- ✅ Backend menolak akses tanpa permission (bukan hanya hide menu).
+- ✅ Project memiliki setup Capacitor siap untuk export Android/iOS (setup, bukan jaminan signed binaries di environment ini).
+
+---
+
+## Phase 6 — Production Hardening (Future / Optional)
+> Peningkatan untuk skala lebih besar & compliance.
 
 ### Potential upgrades
 - Observability:
@@ -220,6 +311,10 @@
   - Restore transactions/ledger secara aman (deduplication strategy) + preview + dry-run.
   - Scheduled backup otomatis.
 - Printing:
-  - Integrasi ESC/POS native (WebUSB/WebSerial) untuk printer tertentu (opsional, butuh whitelist device & user gesture).
+  - Integrasi ESC/POS native (WebUSB/WebSerial) untuk printer tertentu (opsional, butuh whitelist device & user gesture).
 - Performance:
   - Indexing lanjutan, caching agregasi reports, dan background job.
+
+### Known follow-ups (non-blocking)
+- Rate limiting login terkadang tidak terdeteksi di test otomatis (in-memory state + reload). Pertimbangkan Redis rate limit untuk produksi.
+- Pastikan kontrak restore (ingredients/menus) konsisten antara frontend ↔ backend (422 sempat muncul di test lama).

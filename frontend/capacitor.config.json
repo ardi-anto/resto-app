@@ -1,0 +1,30 @@
+{
+  "appId": "com.kedaiops.app",
+  "appName": "KedaiOps",
+  "webDir": "build",
+  "bundledWebRuntime": false,
+  "server": {
+    "hostname": "localhost",
+    "androidScheme": "https",
+    "iosScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#1C1917",
+      "showSpinner": true,
+      "spinnerColor": "#A16207"
+    }
+  },
+  "android": {
+    "buildOptions": {
+      "keystorePath": null,
+      "keystorePassword": null,
+      "keystoreAlias": null,
+      "keystoreAliasPassword": null
+    }
+  },
+  "ios": {
+    "scheme": "KedaiOps"
+  }
+}

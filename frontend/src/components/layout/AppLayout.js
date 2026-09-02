@@ -4,8 +4,8 @@
 import React, { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { 
-  Coffee, Package, ShoppingCart, BarChart3, Settings, Users,
-  Menu, X, LogOut, Wifi, WifiOff, RefreshCw, ChevronRight
+  Coffee, Package, ShoppingCart, BarChart3, Settings, Users, Shield,
+  Menu, X, LogOut, Wifi, WifiOff, RefreshCw, ChevronRight, History
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
@@ -15,23 +15,60 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useSync } from '../../contexts/SyncContext';
 import { cn } from '../../lib/utils';
 
+// Navigation items with permission requirements
 const navItems = [
-  { path: '/pos', icon: ShoppingCart, label: 'Kasir (POS)', roles: ['owner', 'manager', 'kasir'] },
-  { path: '/menus', icon: Coffee, label: 'Menu', roles: ['owner', 'manager'] },
-  { path: '/ingredients', icon: Package, label: 'Bahan / Stok', roles: ['owner', 'manager'] },
-  { path: '/reports', icon: BarChart3, label: 'Laporan', roles: ['owner', 'manager'] },
-  { path: '/settings', icon: Settings, label: 'Pengaturan', roles: ['owner'] },
+  { 
+    path: '/pos', 
+    icon: ShoppingCart, 
+    label: 'Kasir (POS)', 
+    permission: 'page.pos'
+  },
+  { 
+    path: '/menus', 
+    icon: Coffee, 
+    label: 'Menu', 
+    permission: 'page.menus'
+  },
+  { 
+    path: '/ingredients', 
+    icon: Package, 
+    label: 'Bahan / Stok', 
+    permission: 'page.ingredients'
+  },
+  { 
+    path: '/reports', 
+    icon: BarChart3, 
+    label: 'Laporan', 
+    permission: 'page.reports'
+  },
+  { 
+    path: '/sales', 
+    icon: History, 
+    label: 'Riwayat Transaksi', 
+    permission: 'page.sales_history'
+  },
+  { 
+    path: '/roles', 
+    icon: Shield, 
+    label: 'Role & Permission', 
+    permission: 'role.view'
+  },
+  { 
+    path: '/settings', 
+    icon: Settings, 
+    label: 'Pengaturan', 
+    permission: 'page.settings'
+  },
 ];
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
-  const { user, logout, hasRole } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const { isOnline, totalPending, isSyncing, syncNow } = useSync();
 
-  const filteredNavItems = navItems.filter(item => 
-    item.roles.some(role => hasRole(role))
-  );
+  // Filter nav items based on permissions
+  const filteredNavItems = navItems.filter(item => hasPermission(item.permission));
 
   return (
     <div className="min-h-screen bg-background">

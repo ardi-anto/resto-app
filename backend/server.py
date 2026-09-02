@@ -32,7 +32,9 @@ from models import (
     MenuCreate, MenuUpdate,
     SaleCreate, SyncBatchRequest,
     UserCreate, UserLogin, UserUpdate,
-    StoreSettings
+    StoreSettings,
+    RoleCreate, RoleUpdate,
+    AVAILABLE_PERMISSIONS, PERMISSION_CATEGORIES, DEFAULT_ROLE_PERMISSIONS
 )
 
 # Restore request models
@@ -81,6 +83,22 @@ async def lifespan(app: FastAPI):
     await db.sales.create_index("created_at")
     await db.stock_ledger.create_index([("sale_id", 1), ("ingredient_id", 1)], unique=True)
     await db.users.create_index("email", unique=True)
+    await db.roles.create_index("name", unique=True)
+    
+    # Create default system roles if not exist
+    for role_name, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+        existing_role = await db.roles.find_one({"name": role_name, "is_system": True})
+        if not existing_role:
+            await db.roles.insert_one({
+                "name": role_name,
+                "description": f"Role sistem {role_name}",
+                "permissions": permissions,
+                "is_system": True,
+                "created_at": datetime.utcnow()
+            })
+    
+    # Get owner role ID
+    owner_role = await db.roles.find_one({"name": "owner", "is_system": True})
     
     # Create default owner if no users exist
     user_count = await db.users.count_documents({})
@@ -90,7 +108,8 @@ async def lifespan(app: FastAPI):
             "email": "admin@kedaiops.com",
             "password": hashed.decode(),
             "name": "Admin",
-            "role": "owner",
+            "role_id": str(owner_role["_id"]) if owner_role else None,
+            "role_name": "owner",  # Cached for quick access
             "is_active": True,
             "created_at": datetime.utcnow()
         })
@@ -171,10 +190,43 @@ async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(
 
 def require_role(*roles):
     async def role_checker(user: dict = Depends(get_current_user)):
-        if user["role"] not in roles:
-            raise HTTPException(403, f"Role '{user['role']}' tidak diizinkan")
+        user_role = user.get("role_name") or user.get("role")
+        if user_role not in roles:
+            raise HTTPException(403, f"Role '{user_role}' tidak diizinkan")
         return user
     return role_checker
+
+
+# ============ PERMISSION HELPERS ============
+async def get_user_permissions(user: dict) -> List[str]:
+    """Get effective permissions for a user based on their role"""
+    role_id = user.get("role_id")
+    if not role_id:
+        # Fallback to role_name for backwards compatibility
+        role_name = user.get("role_name") or user.get("role")
+        if role_name in DEFAULT_ROLE_PERMISSIONS:
+            return DEFAULT_ROLE_PERMISSIONS[role_name]
+        return []
+    
+    role = await db.roles.find_one({"_id": ObjectId(role_id)})
+    if role:
+        return role.get("permissions", [])
+    return []
+
+
+def require_permission(*permissions: str):
+    """Dependency to require specific permissions"""
+    async def permission_checker(user: dict = Depends(get_current_user)):
+        user_permissions = await get_user_permissions(user)
+        
+        # Check if user has any of the required permissions
+        for perm in permissions:
+            if perm in user_permissions:
+                user["_permissions"] = user_permissions
+                return user
+        
+        raise HTTPException(403, f"Tidak memiliki izin: {', '.join(permissions)}")
+    return permission_checker
 
 
 # ============ HEALTH CHECK ============
@@ -205,62 +257,219 @@ async def login(data: UserLogin, request: Request):
     if not user.get("is_active", True):
         raise HTTPException(401, "Akun tidak aktif")
     
-    token = create_token(str(user["_id"]), user["email"], user["role"])
+    # Get role name from role_id or fallback
+    role_name = user.get("role_name") or user.get("role", "kasir")
+    
+    # Get permissions
+    permissions = await get_user_permissions(serialize_doc(user))
+    
+    token = create_token(str(user["_id"]), user["email"], role_name)
     return {
         "token": token,
         "user": serialize_doc({
             "_id": user["_id"],
             "email": user["email"],
             "name": user["name"],
-            "role": user["role"]
+            "role": role_name,
+            "role_id": user.get("role_id"),
+            "permissions": permissions
         })
     }
 
 
 @app.get("/api/auth/me")
 async def get_me(user: dict = Depends(get_current_user)):
-    return {"user": user}
+    # Get permissions
+    permissions = await get_user_permissions(user)
+    user_data = {**user, "permissions": permissions}
+    # Remove password if present
+    user_data.pop("password", None)
+    return {"user": user_data}
 
 
 @app.post("/api/auth/register")
-async def register(data: UserCreate, current_user: dict = Depends(require_role("owner"))):
-    """Only owner can create new users"""
+async def register(data: UserCreate, current_user: dict = Depends(require_permission("user.create"))):
+    """Create new users - requires user.create permission"""
     existing = await db.users.find_one({"email": data.email})
     if existing:
         raise HTTPException(400, "Email sudah terdaftar")
+    
+    # Get role info
+    role_id = data.role_id
+    role_name = "kasir"  # Default
+    
+    if role_id:
+        role = await db.roles.find_one({"_id": ObjectId(role_id)})
+        if not role:
+            raise HTTPException(400, "Role tidak ditemukan")
+        role_name = role["name"]
+    else:
+        # Get default kasir role
+        kasir_role = await db.roles.find_one({"name": "kasir", "is_system": True})
+        if kasir_role:
+            role_id = str(kasir_role["_id"])
     
     hashed = bcrypt.hashpw(data.password.encode(), bcrypt.gensalt())
     user = {
         "email": data.email,
         "password": hashed.decode(),
         "name": data.name,
-        "role": data.role,
+        "role_id": role_id,
+        "role_name": role_name,
         "is_active": True,
         "created_at": datetime.utcnow()
     }
     result = await db.users.insert_one(user)
     user["_id"] = result.inserted_id
+    del user["password"]
     return {"user": serialize_doc(user)}
 
 
 @app.get("/api/users")
-async def list_users(current_user: dict = Depends(require_role("owner", "manager"))):
+async def list_users(current_user: dict = Depends(require_permission("user.view"))):
     users = await db.users.find({}, {"password": 0}).to_list(100)
     return {"users": serialize_doc(users)}
 
 
 @app.put("/api/users/{user_id}")
-async def update_user(user_id: str, data: UserUpdate, current_user: dict = Depends(require_role("owner"))):
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+async def update_user(user_id: str, data: UserUpdate, current_user: dict = Depends(require_permission("user.edit"))):
+    update_data = {}
+    
+    if data.name is not None:
+        update_data["name"] = data.name
+    if data.is_active is not None:
+        update_data["is_active"] = data.is_active
+    if data.role_id is not None:
+        # Verify role exists
+        role = await db.roles.find_one({"_id": ObjectId(data.role_id)})
+        if not role:
+            raise HTTPException(400, "Role tidak ditemukan")
+        update_data["role_id"] = data.role_id
+        update_data["role_name"] = role["name"]
+    
     if not update_data:
         raise HTTPException(400, "No data to update")
     
+    update_data["updated_at"] = datetime.utcnow()
     result = await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(404, "User tidak ditemukan")
     
     user = await db.users.find_one({"_id": ObjectId(user_id)}, {"password": 0})
     return {"user": serialize_doc(user)}
+
+
+# ============ ROLES & PERMISSIONS ENDPOINTS ============
+@app.get("/api/permissions")
+async def list_permissions():
+    """Get all available permissions and categories for UI"""
+    return {
+        "permissions": AVAILABLE_PERMISSIONS,
+        "categories": PERMISSION_CATEGORIES
+    }
+
+
+@app.get("/api/roles")
+async def list_roles(current_user: dict = Depends(require_permission("role.view"))):
+    """List all roles"""
+    roles = await db.roles.find().sort("name", 1).to_list(100)
+    return {"roles": serialize_doc(roles)}
+
+
+@app.post("/api/roles")
+async def create_role(data: RoleCreate, current_user: dict = Depends(require_permission("role.create"))):
+    """Create a new custom role"""
+    # Check name uniqueness
+    existing = await db.roles.find_one({"name": data.name})
+    if existing:
+        raise HTTPException(400, f"Role '{data.name}' sudah ada")
+    
+    # Validate permissions
+    invalid_perms = [p for p in data.permissions if p not in AVAILABLE_PERMISSIONS]
+    if invalid_perms:
+        raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid_perms)}")
+    
+    role = {
+        "name": data.name,
+        "description": data.description,
+        "permissions": data.permissions,
+        "is_system": False,  # Custom roles cannot be system roles
+        "created_at": datetime.utcnow()
+    }
+    result = await db.roles.insert_one(role)
+    role["_id"] = result.inserted_id
+    return {"role": serialize_doc(role)}
+
+
+@app.get("/api/roles/{role_id}")
+async def get_role(role_id: str, current_user: dict = Depends(require_permission("role.view"))):
+    """Get a specific role"""
+    role = await db.roles.find_one({"_id": ObjectId(role_id)})
+    if not role:
+        raise HTTPException(404, "Role tidak ditemukan")
+    return {"role": serialize_doc(role)}
+
+
+@app.put("/api/roles/{role_id}")
+async def update_role(role_id: str, data: RoleUpdate, current_user: dict = Depends(require_permission("role.edit"))):
+    """Update a role"""
+    role = await db.roles.find_one({"_id": ObjectId(role_id)})
+    if not role:
+        raise HTTPException(404, "Role tidak ditemukan")
+    
+    update_data = {}
+    
+    if data.name is not None:
+        # Check name uniqueness (excluding current role)
+        existing = await db.roles.find_one({"name": data.name, "_id": {"$ne": ObjectId(role_id)}})
+        if existing:
+            raise HTTPException(400, f"Role '{data.name}' sudah ada")
+        update_data["name"] = data.name
+    
+    if data.description is not None:
+        update_data["description"] = data.description
+    
+    if data.permissions is not None:
+        # Validate permissions
+        invalid_perms = [p for p in data.permissions if p not in AVAILABLE_PERMISSIONS]
+        if invalid_perms:
+            raise HTTPException(400, f"Permission tidak valid: {', '.join(invalid_perms)}")
+        update_data["permissions"] = data.permissions
+    
+    if not update_data:
+        raise HTTPException(400, "No data to update")
+    
+    update_data["updated_at"] = datetime.utcnow()
+    await db.roles.update_one({"_id": ObjectId(role_id)}, {"$set": update_data})
+    
+    # If role name changed, update all users with this role
+    if "name" in update_data:
+        await db.users.update_many(
+            {"role_id": role_id},
+            {"$set": {"role_name": update_data["name"]}}
+        )
+    
+    updated_role = await db.roles.find_one({"_id": ObjectId(role_id)})
+    return {"role": serialize_doc(updated_role)}
+
+
+@app.delete("/api/roles/{role_id}")
+async def delete_role(role_id: str, current_user: dict = Depends(require_permission("role.delete"))):
+    """Delete a role (system roles cannot be deleted)"""
+    role = await db.roles.find_one({"_id": ObjectId(role_id)})
+    if not role:
+        raise HTTPException(404, "Role tidak ditemukan")
+    
+    if role.get("is_system"):
+        raise HTTPException(400, "Role sistem tidak bisa dihapus")
+    
+    # Check if any users have this role
+    user_count = await db.users.count_documents({"role_id": role_id})
+    if user_count > 0:
+        raise HTTPException(400, f"Tidak bisa hapus role yang masih digunakan oleh {user_count} user")
+    
+    await db.roles.delete_one({"_id": ObjectId(role_id)})
+    return {"message": "Role dihapus"}
 
 
 # ============ INGREDIENTS ENDPOINTS ============
@@ -275,7 +484,7 @@ async def list_ingredients(low_stock_only: bool = False):
 
 
 @app.post("/api/ingredients")
-async def create_ingredient(data: IngredientCreate, user: dict = Depends(require_role("owner", "manager"))):
+async def create_ingredient(data: IngredientCreate, user: dict = Depends(require_permission("ingredient.create"))):
     ingredient = {
         **data.model_dump(),
         "created_at": datetime.utcnow(),
@@ -287,7 +496,7 @@ async def create_ingredient(data: IngredientCreate, user: dict = Depends(require
 
 
 @app.put("/api/ingredients/{ingredient_id}")
-async def update_ingredient(ingredient_id: str, data: IngredientUpdate, user: dict = Depends(require_role("owner", "manager"))):
+async def update_ingredient(ingredient_id: str, data: IngredientUpdate, user: dict = Depends(require_permission("ingredient.edit"))):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(400, "No data to update")
@@ -302,7 +511,7 @@ async def update_ingredient(ingredient_id: str, data: IngredientUpdate, user: di
 
 
 @app.delete("/api/ingredients/{ingredient_id}")
-async def delete_ingredient(ingredient_id: str, user: dict = Depends(require_role("owner"))):
+async def delete_ingredient(ingredient_id: str, user: dict = Depends(require_permission("ingredient.delete"))):
     # Check if used in any menu
     menu_using = await db.menus.find_one({"recipe.ingredient_id": ingredient_id})
     if menu_using:
@@ -315,7 +524,7 @@ async def delete_ingredient(ingredient_id: str, user: dict = Depends(require_rol
 
 
 @app.post("/api/ingredients/adjust")
-async def adjust_stock(data: StockAdjustment, user: dict = Depends(require_role("owner", "manager"))):
+async def adjust_stock(data: StockAdjustment, user: dict = Depends(require_permission("ingredient.adjust_stock"))):
     """Manual stock adjustment (restock, waste, correction)"""
     ingredient = await db.ingredients.find_one({"_id": ObjectId(data.ingredient_id)})
     if not ingredient:
@@ -368,7 +577,7 @@ async def list_categories():
 
 
 @app.post("/api/menus")
-async def create_menu(data: MenuCreate, user: dict = Depends(require_role("owner", "manager"))):
+async def create_menu(data: MenuCreate, user: dict = Depends(require_permission("menu.create"))):
     # Validate recipe ingredients exist
     for item in data.recipe:
         ing = await db.ingredients.find_one({"_id": ObjectId(item.ingredient_id)})
@@ -395,7 +604,7 @@ async def get_menu(menu_id: str):
 
 
 @app.put("/api/menus/{menu_id}")
-async def update_menu(menu_id: str, data: MenuUpdate, user: dict = Depends(require_role("owner", "manager"))):
+async def update_menu(menu_id: str, data: MenuUpdate, user: dict = Depends(require_permission("menu.edit"))):
     update_data = {}
     for k, v in data.model_dump().items():
         if v is not None:
@@ -417,7 +626,7 @@ async def update_menu(menu_id: str, data: MenuUpdate, user: dict = Depends(requi
 
 
 @app.delete("/api/menus/{menu_id}")
-async def delete_menu(menu_id: str, user: dict = Depends(require_role("owner"))):
+async def delete_menu(menu_id: str, user: dict = Depends(require_permission("menu.delete"))):
     result = await db.menus.delete_one({"_id": ObjectId(menu_id)})
     if result.deleted_count == 0:
         raise HTTPException(404, "Menu tidak ditemukan")
@@ -567,7 +776,7 @@ async def list_sales_paginated(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     search: Optional[str] = None,
-    user: dict = Depends(require_role("owner", "manager"))
+    user: dict = Depends(require_permission("report.view_sales"))
 ):
     """Paginated sales list with search"""
     query = {}
@@ -729,7 +938,7 @@ async def get_settings():
 
 
 @app.put("/api/settings")
-async def update_settings(data: StoreSettings, user: dict = Depends(require_role("owner"))):
+async def update_settings(data: StoreSettings, user: dict = Depends(require_permission("settings.store"))):
     await db.settings.update_one(
         {"type": "store"},
         {"$set": {**data.model_dump(), "type": "store", "updated_at": datetime.utcnow()}},
@@ -795,7 +1004,7 @@ async def get_ingredient_ledger(
 async def export_sales_csv(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    user: dict = Depends(require_role("owner", "manager"))
+    user: dict = Depends(require_permission("report.export"))
 ):
     """Export sales data to CSV"""
     query = {}
@@ -847,7 +1056,7 @@ async def export_sales_csv(
 
 @app.get("/api/reports/export/ingredients")
 async def export_ingredients_csv(
-    user: dict = Depends(require_role("owner", "manager"))
+    user: dict = Depends(require_permission("report.export"))
 ):
     """Export ingredients/stock data to CSV"""
     ingredients = await db.ingredients.find().sort("name", 1).to_list(1000)
@@ -890,7 +1099,7 @@ async def export_ingredients_csv(
 @app.get("/api/reports/export/usage")
 async def export_usage_csv(
     days: int = Query(30, le=365),
-    user: dict = Depends(require_role("owner", "manager"))
+    user: dict = Depends(require_permission("report.export"))
 ):
     """Export ingredient usage history to CSV"""
     start_date = datetime.utcnow() - timedelta(days=days)
@@ -949,12 +1158,12 @@ async def export_usage_csv(
 
 # ============ BACKUP/RESTORE ENDPOINTS ============
 @app.get("/api/backup")
-async def backup_data(user: dict = Depends(require_role("owner"))):
+async def backup_data(user: dict = Depends(require_permission("settings.backup"))):
     """Export all data as JSON for backup"""
     backup = {
         "version": "1.0",
         "created_at": datetime.utcnow().isoformat(),
-        "created_by": user["email"],
+        "created_by": user.get("email", "unknown"),
         "data": {}
     }
     
@@ -983,6 +1192,10 @@ async def backup_data(user: dict = Depends(require_role("owner"))):
     users = await db.users.find({}, {"password": 0}).to_list(100)
     backup["data"]["users"] = serialize_doc(users)
     
+    # Export roles
+    roles = await db.roles.find().to_list(100)
+    backup["data"]["roles"] = serialize_doc(roles)
+    
     # Create JSON response
     json_str = json.dumps(backup, indent=2, ensure_ascii=False, default=str)
     
@@ -999,7 +1212,7 @@ async def restore_data(
     restore_ingredients: bool = True,
     restore_menus: bool = True,
     restore_settings: bool = True,
-    user: dict = Depends(require_role("owner"))
+    user: dict = Depends(require_permission("settings.backup"))
 ):
     """
     Restore data from backup JSON (uploaded as request body)
@@ -1014,7 +1227,7 @@ async def restore_data(
 async def restore_ingredients_endpoint(
     data: RestoreIngredientsRequest,
     mode: str = Query("merge", regex="^(merge|replace)$"),
-    user: dict = Depends(require_role("owner"))
+    user: dict = Depends(require_permission("settings.backup"))
 ):
     """Restore ingredients from backup data"""
     ingredients = data.ingredients
@@ -1064,7 +1277,7 @@ async def restore_ingredients_endpoint(
 async def restore_menus_endpoint(
     data: RestoreMenusRequest,
     mode: str = Query("merge", regex="^(merge|replace)$"),
-    user: dict = Depends(require_role("owner"))
+    user: dict = Depends(require_permission("settings.backup"))
 ):
     """Restore menus from backup data"""
     menus = data.menus
@@ -1105,7 +1318,7 @@ async def list_ledger_paginated(
     ingredient_id: Optional[str] = None,
     type_filter: Optional[str] = None,
     days: int = Query(30, le=365),
-    user: dict = Depends(require_role("owner", "manager"))
+    user: dict = Depends(require_permission("ingredient.view_ledger"))
 ):
     """Paginated stock ledger with filters"""
     start_date = datetime.utcnow() - timedelta(days=days)

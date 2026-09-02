@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import { Alert, AlertDescription } from '../components/ui/alert';
-import { settingsAPI, usersAPI, authAPI, backupAPI } from '../lib/api';
+import { settingsAPI, usersAPI, authAPI, backupAPI, rolesAPI } from '../lib/api';
 import { useSync } from '../contexts/SyncContext';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -32,10 +32,11 @@ export function SettingsPage() {
     auto_print: false
   });
   const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const { isOnline, pendingCount, retryingCount, failedCount, isSyncing, syncNow, lastSyncResult, getFailedSales, retrySale, deleteSale } = useSync();
-  const { user: currentUser, hasRole } = useAuth();
+  const { user: currentUser, hasPermission } = useAuth();
   
   // User dialog
   const [userDialog, setUserDialog] = useState({ open: false, user: null });
@@ -43,7 +44,7 @@ export function SettingsPage() {
     email: '',
     password: '',
     name: '',
-    role: 'kasir'
+    role_id: ''
   });
 
   // Failed sales
@@ -70,9 +71,10 @@ export function SettingsPage() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [settingsRes, usersRes] = await Promise.all([
+      const [settingsRes, usersRes, rolesRes] = await Promise.all([
         settingsAPI.get(),
-        hasRole('owner', 'manager') ? usersAPI.list() : Promise.resolve({ data: { users: [] } })
+        hasPermission('user.view') ? usersAPI.list() : Promise.resolve({ data: { users: [] } }),
+        hasPermission('user.view') ? rolesAPI.list() : Promise.resolve({ data: { roles: [] } })
       ]);
       setStoreSettings(settingsRes.data.settings || {
         store_name: '',
@@ -84,6 +86,7 @@ export function SettingsPage() {
         auto_print: false
       });
       setUsers(usersRes.data.users || []);
+      setRoles(rolesRes.data.roles || []);
     } catch (error) {
       console.error('Error fetching settings:', error);
       toast.error('Gagal memuat pengaturan');
@@ -130,12 +133,12 @@ export function SettingsPage() {
       if (userDialog.user) {
         await usersAPI.update(userDialog.user._id, {
           name: userForm.name,
-          role: userForm.role,
+          role_id: userForm.role_id,
           is_active: userForm.is_active
         });
         toast.success('User berhasil diperbarui');
       } else {
-        await authAPI.register(userForm);
+        await usersAPI.create(userForm);
         toast.success('User berhasil ditambahkan');
       }
       setUserDialog({ open: false, user: null });
@@ -152,9 +155,14 @@ export function SettingsPage() {
       email: user.email,
       password: '',
       name: user.name,
-      role: user.role,
+      role_id: user.role_id || '',
       is_active: user.is_active !== false
     });
+  };
+
+  const getRoleName = (roleId) => {
+    const role = roles.find(r => r._id === roleId);
+    return role?.name || 'Unknown';
   };
 
   const handleSync = async () => {
@@ -339,7 +347,7 @@ export function SettingsPage() {
             <Database className="h-4 w-4 mr-2" />
             Backup
           </TabsTrigger>
-          {hasRole('owner', 'manager') && (
+          {hasPermission('user.view') && (
             <TabsTrigger value="users">
               <Users className="h-4 w-4 mr-2" />
               User
@@ -690,7 +698,7 @@ export function SettingsPage() {
         </TabsContent>
 
         {/* Users */}
-        {hasRole('owner', 'manager') && (
+        {hasPermission('user.view') && (
           <TabsContent value="users">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -702,7 +710,7 @@ export function SettingsPage() {
                     Kelola akses pengguna
                   </CardDescription>
                 </div>
-                {hasRole('owner') && (
+                {hasPermission('user.create') && (
                   <Button onClick={openCreateUserDialog} data-testid="settings-add-user-button">
                     <Plus className="h-4 w-4 mr-2" />
                     Tambah
@@ -722,7 +730,7 @@ export function SettingsPage() {
                         <TableHead>Email</TableHead>
                         <TableHead>Role</TableHead>
                         <TableHead>Status</TableHead>
-                        {hasRole('owner') && <TableHead className="text-right">Aksi</TableHead>}
+                        {hasPermission('user.edit') && <TableHead className="text-right">Aksi</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -733,7 +741,7 @@ export function SettingsPage() {
                           <TableCell>
                             <Badge variant="outline" className="capitalize">
                               <Shield className="h-3 w-3 mr-1" />
-                              {user.role}
+                              {user.role_name || user.role || 'Unknown'}
                             </Badge>
                           </TableCell>
                           <TableCell>
@@ -741,7 +749,7 @@ export function SettingsPage() {
                               {user.is_active !== false ? 'Aktif' : 'Nonaktif'}
                             </Badge>
                           </TableCell>
-                          {hasRole('owner') && (
+                          {hasPermission('user.edit') && (
                             <TableCell className="text-right">
                               <Button variant="ghost" size="icon" onClick={() => openEditUserDialog(user)} disabled={user._id === currentUser?._id}>
                                 <Pencil className="h-4 w-4" />
@@ -788,12 +796,14 @@ export function SettingsPage() {
 
             <div className="space-y-2">
               <Label htmlFor="user_role">Role</Label>
-              <Select value={userForm.role} onValueChange={(v) => setUserForm(prev => ({ ...prev, role: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select value={userForm.role_id} onValueChange={(v) => setUserForm(prev => ({ ...prev, role_id: v }))}>
+                <SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="kasir">Kasir</SelectItem>
-                  <SelectItem value="manager">Manager</SelectItem>
-                  <SelectItem value="owner">Owner</SelectItem>
+                  {roles.map(role => (
+                    <SelectItem key={role._id} value={role._id} className="capitalize">
+                      {role.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

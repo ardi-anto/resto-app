@@ -432,6 +432,224 @@ class KedaiOpsAPITester:
             print(f"   Has next: {pagination.get('has_next', False)}")
         return success, response
 
+    # ============ PHASE 5: ROLES & PERMISSIONS TESTS ============
+    def test_login_with_permissions(self, email, password):
+        """Test login returns user with permissions array (Phase 5)"""
+        success, response = self.run_test(
+            "Login with Permissions (Phase 5)",
+            "POST",
+            "api/auth/login",
+            200,
+            data={"email": email, "password": password}
+        )
+        if success:
+            user = response.get('user', {})
+            permissions = user.get('permissions', [])
+            print(f"   User: {user.get('name')} ({user.get('role')})")
+            print(f"   Permissions count: {len(permissions)}")
+            print(f"   Sample permissions: {permissions[:5] if len(permissions) > 5 else permissions}")
+            if 'token' in response:
+                self.token = response['token']
+            return True, permissions
+        return False, []
+
+    def test_get_permissions(self):
+        """Test /api/permissions endpoint (Phase 5)"""
+        success, response = self.run_test(
+            "Get Available Permissions (Phase 5)",
+            "GET",
+            "api/permissions",
+            200
+        )
+        if success:
+            permissions = response.get('permissions', {})
+            categories = response.get('categories', {})
+            print(f"   Total permissions: {len(permissions)}")
+            print(f"   Permission categories: {len(categories)}")
+            print(f"   Categories: {list(categories.keys())}")
+        return success, response
+
+    def test_list_roles(self):
+        """Test GET /api/roles (Phase 5)"""
+        success, response = self.run_test(
+            "List Roles (Phase 5)",
+            "GET",
+            "api/roles",
+            200
+        )
+        if success:
+            roles = response.get('roles', [])
+            print(f"   Total roles: {len(roles)}")
+            for role in roles:
+                print(f"   - {role.get('name')}: {len(role.get('permissions', []))} permissions, system={role.get('is_system', False)}")
+        return success, response
+
+    def test_create_role(self, name, description, permissions):
+        """Test POST /api/roles (Phase 5)"""
+        success, response = self.run_test(
+            f"Create Role: {name} (Phase 5)",
+            "POST",
+            "api/roles",
+            200,
+            data={
+                "name": name,
+                "description": description,
+                "permissions": permissions
+            }
+        )
+        if success and 'role' in response:
+            role_id = response['role']['_id']
+            print(f"   Created role ID: {role_id}")
+            print(f"   Permissions: {len(permissions)}")
+            return role_id
+        return None
+
+    def test_get_role(self, role_id):
+        """Test GET /api/roles/{role_id} (Phase 5)"""
+        success, response = self.run_test(
+            f"Get Role by ID (Phase 5)",
+            "GET",
+            f"api/roles/{role_id}",
+            200
+        )
+        if success:
+            role = response.get('role', {})
+            print(f"   Role: {role.get('name')}")
+            print(f"   Permissions: {len(role.get('permissions', []))}")
+        return success, response
+
+    def test_update_role(self, role_id, permissions):
+        """Test PUT /api/roles/{role_id} (Phase 5)"""
+        success, response = self.run_test(
+            f"Update Role Permissions (Phase 5)",
+            "PUT",
+            f"api/roles/{role_id}",
+            200,
+            data={"permissions": permissions}
+        )
+        if success:
+            role = response.get('role', {})
+            print(f"   Updated permissions: {len(role.get('permissions', []))}")
+        return success, response
+
+    def test_delete_role(self, role_id):
+        """Test DELETE /api/roles/{role_id} (Phase 5)"""
+        success, response = self.run_test(
+            f"Delete Role (Phase 5)",
+            "DELETE",
+            f"api/roles/{role_id}",
+            200
+        )
+        if success:
+            print(f"   Role deleted successfully")
+        return success
+
+    def test_delete_system_role(self, role_id):
+        """Test DELETE system role should fail (Phase 5)"""
+        success, response = self.run_test(
+            f"Delete System Role (should fail) (Phase 5)",
+            "DELETE",
+            f"api/roles/{role_id}",
+            400  # Expect 400 error
+        )
+        if success:
+            print(f"   System role deletion correctly blocked")
+        return success
+
+    def test_permission_middleware_unauthorized(self):
+        """Test permission middleware blocks unauthorized access (Phase 5)"""
+        # Save current token
+        original_token = self.token
+        
+        # Create a test user with limited permissions (kasir role)
+        # First, we need to create a user with kasir role
+        print(f"\n🔍 Testing Permission Middleware (Phase 5)...")
+        print(f"   Creating test user with limited permissions...")
+        
+        # Get kasir role ID
+        success, roles_response = self.run_test(
+            "Get Kasir Role ID",
+            "GET",
+            "api/roles",
+            200
+        )
+        
+        if not success:
+            print(f"   ❌ Failed to get roles")
+            return False
+        
+        kasir_role = None
+        for role in roles_response.get('roles', []):
+            if role.get('name') == 'kasir':
+                kasir_role = role
+                break
+        
+        if not kasir_role:
+            print(f"   ❌ Kasir role not found")
+            return False
+        
+        # Create test user with kasir role
+        test_email = f"test_kasir_{uuid.uuid4().hex[:8]}@test.com"
+        success, user_response = self.run_test(
+            "Create Test Kasir User",
+            "POST",
+            "api/auth/register",
+            200,
+            data={
+                "email": test_email,
+                "password": "test123",
+                "name": "Test Kasir",
+                "role_id": kasir_role['_id']
+            }
+        )
+        
+        if not success:
+            print(f"   ❌ Failed to create test user")
+            self.token = original_token
+            return False
+        
+        # Login as kasir
+        success, login_response = self.run_test(
+            "Login as Kasir",
+            "POST",
+            "api/auth/login",
+            200,
+            data={"email": test_email, "password": "test123"}
+        )
+        
+        if not success:
+            print(f"   ❌ Failed to login as kasir")
+            self.token = original_token
+            return False
+        
+        self.token = login_response.get('token')
+        
+        # Try to access protected endpoint (create ingredient - requires ingredient.create permission)
+        print(f"   Testing unauthorized access to ingredient creation...")
+        success, response = self.run_test(
+            "Unauthorized Ingredient Creation (should fail)",
+            "POST",
+            "api/ingredients",
+            403,  # Expect 403 Forbidden
+            data={
+                "name": "Test Unauthorized",
+                "unit": "gram",
+                "stock_qty": 100,
+                "low_stock_threshold": 10
+            }
+        )
+        
+        # Restore original token
+        self.token = original_token
+        
+        if success:
+            print(f"   ✅ Permission middleware correctly blocked unauthorized access")
+            self.tests_passed += 1
+            return True
+        else:
+            print(f"   ❌ Permission middleware did not block unauthorized access")
+            return False
+
 
 def main():
     print("=" * 60)
@@ -689,6 +907,74 @@ def main():
     print("=" * 60)
     
     tester.test_sales_paginated(page=1, per_page=10)
+    
+    # Test 19: Phase 5 - Roles & Permissions
+    print("\n" + "=" * 60)
+    print("PHASE 15: ROLES & PERMISSIONS (Phase 5)")
+    print("=" * 60)
+    
+    # Test login returns permissions
+    login_success, user_permissions = tester.test_login_with_permissions("admin@kedaiops.com", "admin123")
+    if not login_success:
+        print("\n❌ Login with permissions failed")
+    
+    # Test get permissions endpoint
+    perms_success, perms_data = tester.test_get_permissions()
+    if not perms_success:
+        print("\n❌ Get permissions endpoint failed")
+    
+    # Test list roles
+    roles_success, roles_data = tester.test_list_roles()
+    if not roles_success:
+        print("\n❌ List roles failed")
+    
+    # Test create custom role
+    custom_role_id = None
+    if perms_success and perms_data:
+        # Create a custom role with limited permissions
+        custom_permissions = [
+            "page.pos",
+            "pos.create_sale",
+            "menu.view",
+            "ingredient.view"
+        ]
+        custom_role_id = tester.test_create_role(
+            "Test Supervisor",
+            "Custom role for testing",
+            custom_permissions
+        )
+    
+    # Test get role by ID
+    if custom_role_id:
+        tester.test_get_role(custom_role_id)
+        
+        # Test update role permissions
+        updated_permissions = [
+            "page.pos",
+            "pos.create_sale",
+            "menu.view",
+            "menu.create",
+            "ingredient.view",
+            "ingredient.create"
+        ]
+        tester.test_update_role(custom_role_id, updated_permissions)
+        
+        # Test delete custom role
+        tester.test_delete_role(custom_role_id)
+    
+    # Test delete system role (should fail)
+    if roles_success and roles_data:
+        owner_role = None
+        for role in roles_data.get('roles', []):
+            if role.get('name') == 'owner' and role.get('is_system'):
+                owner_role = role
+                break
+        
+        if owner_role:
+            tester.test_delete_system_role(owner_role['_id'])
+    
+    # Test permission middleware
+    tester.test_permission_middleware_unauthorized()
     
     # Final Summary
     print("\n" + "=" * 60)

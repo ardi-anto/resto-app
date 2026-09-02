@@ -108,6 +108,20 @@ export const settingsAPI = {
 export const usersAPI = {
   list: () => api.get('/api/users'),
   update: (id, data) => api.put(`/api/users/${id}`, data),
+  create: (data) => api.post('/api/auth/register', data),
+};
+
+// Roles & Permissions
+export const rolesAPI = {
+  list: () => api.get('/api/roles'),
+  get: (id) => api.get(`/api/roles/${id}`),
+  create: (data) => api.post('/api/roles', data),
+  update: (id, data) => api.put(`/api/roles/${id}`, data),
+  delete: (id) => api.delete(`/api/roles/${id}`),
+};
+
+export const permissionsAPI = {
+  list: () => api.get('/api/permissions'),
 };
 
 export default api;
