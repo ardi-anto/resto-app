@@ -1,8 +1,8 @@
 /**
  * Menu Management Page
  */
-import React, { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, Search, Coffee, Loader2, X, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Pencil, Trash2, Search, Coffee, Loader2, X, ChevronDown, Image, Upload } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -20,6 +20,9 @@ import { menusAPI, ingredientsAPI } from '../lib/api';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
 
+// Default categories
+const DEFAULT_CATEGORIES = ['Umum', 'Kopi', 'Non-Kopi', 'Makanan', 'Snack'];
+
 export function MenusPage() {
   const [menus, setMenus] = useState([]);
   const [ingredients, setIngredients] = useState([]);
@@ -36,9 +39,14 @@ export function MenusPage() {
     category: 'Umum',
     price: '',
     is_active: true,
+    image_url: '',
     recipe: []
   });
   const [isSaving, setIsSaving] = useState(false);
+  
+  // Custom category state
+  const [showCustomCategory, setShowCustomCategory] = useState(false);
+  const [customCategory, setCustomCategory] = useState('');
   
   // Delete dialog
   const [deleteDialog, setDeleteDialog] = useState({ open: false, menu: null });
@@ -57,7 +65,10 @@ export function MenusPage() {
       ]);
       setMenus(menusRes.data.menus);
       setIngredients(ingredientsRes.data.ingredients);
-      setCategories(categoriesRes.data.categories || ['Umum']);
+      // Merge default categories with existing ones from menus
+      const existingCats = categoriesRes.data.categories || [];
+      const allCategories = [...new Set([...DEFAULT_CATEGORIES, ...existingCats])];
+      setCategories(allCategories);
     } catch (error) {
       console.error('Error fetching data:', error);
       toast.error('Gagal memuat data');
@@ -80,20 +91,28 @@ export function MenusPage() {
       category: 'Umum',
       price: '',
       is_active: true,
+      image_url: '',
       recipe: []
     });
+    setShowCustomCategory(false);
+    setCustomCategory('');
     setIsFormOpen(true);
   };
 
   const openEditForm = (menu) => {
     setEditingMenu(menu);
+    // Check if category is custom (not in defaults)
+    const isCustomCat = !DEFAULT_CATEGORIES.includes(menu.category);
     setFormData({
       name: menu.name,
-      category: menu.category,
+      category: isCustomCat ? '__custom__' : menu.category,
       price: menu.price.toString(),
       is_active: menu.is_active,
+      image_url: menu.image_url || '',
       recipe: menu.recipe || []
     });
+    setShowCustomCategory(isCustomCat);
+    setCustomCategory(isCustomCat ? menu.category : '');
     setIsFormOpen(true);
   };
 
@@ -103,10 +122,18 @@ export function MenusPage() {
       return;
     }
 
+    // Validate custom category
+    const finalCategory = formData.category === '__custom__' ? customCategory.trim() : formData.category;
+    if (!finalCategory) {
+      toast.error('Kategori harus diisi');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const data = {
         ...formData,
+        category: finalCategory,
         price: parseFloat(formData.price),
         recipe: formData.recipe.map(r => ({
           ingredient_id: r.ingredient_id,
@@ -129,6 +156,17 @@ export function MenusPage() {
       toast.error(error.response?.data?.detail || 'Gagal menyimpan menu');
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleCategoryChange = (value) => {
+    if (value === '__custom__') {
+      setShowCustomCategory(true);
+      setFormData(prev => ({ ...prev, category: '__custom__' }));
+    } else {
+      setShowCustomCategory(false);
+      setCustomCategory('');
+      setFormData(prev => ({ ...prev, category: value }));
     }
   };
 
@@ -333,6 +371,43 @@ export function MenusPage() {
 
           <ScrollArea className="h-[calc(100vh-180px)] pr-4">
             <div className="space-y-4 py-4">
+              {/* Image Preview & URL */}
+              <div className="space-y-2">
+                <Label>Gambar Menu</Label>
+                <div className="flex gap-3">
+                  <div className="w-24 h-24 bg-secondary rounded-lg flex items-center justify-center overflow-hidden border-2 border-dashed border-border">
+                    {formData.image_url ? (
+                      <img 
+                        src={formData.image_url} 
+                        alt="Preview" 
+                        className="w-full h-full object-cover"
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'flex';
+                        }}
+                      />
+                    ) : null}
+                    <div className={cn(
+                      "flex flex-col items-center justify-center text-muted-foreground",
+                      formData.image_url && "hidden"
+                    )}>
+                      <Image className="h-8 w-8 mb-1 opacity-50" />
+                      <span className="text-xs">No Image</span>
+                    </div>
+                  </div>
+                  <div className="flex-1 space-y-2">
+                    <Input
+                      placeholder="URL gambar (https://...)"
+                      value={formData.image_url}
+                      onChange={(e) => setFormData(prev => ({ ...prev, image_url: e.target.value }))}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Masukkan URL gambar dari internet atau kosongkan untuk menggunakan ikon default
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="name">Nama Menu *</Label>
                 <Input
@@ -348,19 +423,40 @@ export function MenusPage() {
                   <Label htmlFor="category">Kategori</Label>
                   <Select 
                     value={formData.category} 
-                    onValueChange={(v) => setFormData(prev => ({ ...prev, category: v }))}
+                    onValueChange={handleCategoryChange}
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Pilih kategori" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Umum">Umum</SelectItem>
-                      <SelectItem value="Kopi">Kopi</SelectItem>
-                      <SelectItem value="Non-Kopi">Non-Kopi</SelectItem>
-                      <SelectItem value="Makanan">Makanan</SelectItem>
-                      <SelectItem value="Snack">Snack</SelectItem>
+                      {DEFAULT_CATEGORIES.map(cat => (
+                        <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                      ))}
+                      {/* Show custom categories from existing menus */}
+                      {categories
+                        .filter(cat => !DEFAULT_CATEGORIES.includes(cat))
+                        .map(cat => (
+                          <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                        ))
+                      }
+                      <Separator className="my-1" />
+                      <SelectItem value="__custom__">
+                        <span className="flex items-center gap-1">
+                          <Plus className="h-3 w-3" />
+                          Kategori Baru...
+                        </span>
+                      </SelectItem>
                     </SelectContent>
                   </Select>
+                  {showCustomCategory && (
+                    <Input
+                      placeholder="Nama kategori baru"
+                      value={customCategory}
+                      onChange={(e) => setCustomCategory(e.target.value)}
+                      className="mt-2"
+                      autoFocus
+                    />
+                  )}
                 </div>
 
                 <div className="space-y-2">
