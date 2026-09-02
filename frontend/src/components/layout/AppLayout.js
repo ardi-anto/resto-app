@@ -27,7 +27,7 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const { user, logout, hasRole } = useAuth();
-  const { isOnline, pendingCount, isSyncing, syncNow } = useSync();
+  const { isOnline, totalPending, isSyncing, syncNow } = useSync();
 
   const filteredNavItems = navItems.filter(item => 
     item.roles.some(role => hasRole(role))
@@ -53,7 +53,7 @@ export function AppLayout() {
 
         <SyncStatusButton 
           isOnline={isOnline} 
-          pendingCount={pendingCount} 
+          pendingCount={totalPending} 
           isSyncing={isSyncing} 
           onSync={syncNow} 
         />
@@ -77,7 +77,7 @@ export function AppLayout() {
           <div className="px-4 py-3 border-b">
             <SyncStatusBanner 
               isOnline={isOnline} 
-              pendingCount={pendingCount} 
+              pendingCount={totalPending} 
               isSyncing={isSyncing} 
               onSync={syncNow} 
             />
@@ -177,7 +177,7 @@ export function AppLayout() {
             <div className="px-4">
               <SyncStatusBanner 
                 isOnline={isOnline} 
-                pendingCount={pendingCount} 
+                pendingCount={totalPending} 
                 isSyncing={isSyncing} 
                 onSync={syncNow} 
               />

@@ -49,6 +49,7 @@ export const ingredientsAPI = {
   update: (id, data) => api.put(`/api/ingredients/${id}`, data),
   delete: (id) => api.delete(`/api/ingredients/${id}`),
   adjust: (data) => api.post('/api/ingredients/adjust', data),
+  getLedger: (id, days = 30) => api.get(`/api/ingredients/${id}/ledger`, { params: { days } }),
 };
 
 // Menus
@@ -76,6 +77,16 @@ export const reportsAPI = {
     api.get('/api/reports/summary', { params: { start_date: startDate, end_date: endDate } }),
   daily: (days = 7) => api.get('/api/reports/daily', { params: { days } }),
   ingredientUsage: (days = 7) => api.get('/api/reports/ingredient-usage', { params: { days } }),
+  // Export endpoints
+  exportSales: (startDate, endDate) => 
+    api.get('/api/reports/export/sales', { 
+      params: { start_date: startDate, end_date: endDate },
+      responseType: 'blob'
+    }),
+  exportIngredients: () => 
+    api.get('/api/reports/export/ingredients', { responseType: 'blob' }),
+  exportUsage: (days = 30) => 
+    api.get('/api/reports/export/usage', { params: { days }, responseType: 'blob' }),
 };
 
 // Settings

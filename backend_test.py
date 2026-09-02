@@ -247,6 +247,92 @@ class KedaiOpsAPITester:
                 print(f"   - {item['name']}: {item['stock_qty']} {item['unit']} (min: {item['low_stock_threshold']})")
         return success, response
 
+    def test_ingredient_ledger(self, ingredient_id, ingredient_name):
+        """Test ingredient ledger history endpoint"""
+        success, response = self.run_test(
+            f"Get Ingredient Ledger History: {ingredient_name}",
+            "GET",
+            f"api/ingredients/{ingredient_id}/ledger",
+            200,
+            params={"days": 30, "limit": 100}
+        )
+        if success:
+            ledger = response.get('ledger', [])
+            summary = response.get('summary', {})
+            print(f"   Ledger entries: {len(ledger)}")
+            print(f"   Sales usage: {summary.get('sales_usage', 0)}")
+            print(f"   Restock total: {summary.get('restock_total', 0)}")
+            print(f"   Waste total: {summary.get('waste_total', 0)}")
+            print(f"   Current stock: {summary.get('current_stock', 0)}")
+        return success, response
+
+    def test_export_sales_csv(self):
+        """Test export sales to CSV"""
+        success, response = self.run_test(
+            "Export Sales to CSV",
+            "GET",
+            "api/reports/export/sales",
+            200
+        )
+        if success:
+            # Check if response is CSV format
+            print(f"   CSV export successful (response length: {len(str(response))} chars)")
+        return success
+
+    def test_export_ingredients_csv(self):
+        """Test export ingredients to CSV"""
+        success, response = self.run_test(
+            "Export Ingredients to CSV",
+            "GET",
+            "api/reports/export/ingredients",
+            200
+        )
+        if success:
+            print(f"   CSV export successful (response length: {len(str(response))} chars)")
+        return success
+
+    def test_export_usage_csv(self):
+        """Test export usage to CSV"""
+        success, response = self.run_test(
+            "Export Usage to CSV",
+            "GET",
+            "api/reports/export/usage",
+            200,
+            params={"days": 30}
+        )
+        if success:
+            print(f"   CSV export successful (response length: {len(str(response))} chars)")
+        return success
+
+    def test_settings_get(self):
+        """Test get settings"""
+        success, response = self.run_test(
+            "Get Settings",
+            "GET",
+            "api/settings",
+            200
+        )
+        if success:
+            settings = response.get('settings', {})
+            print(f"   Store name: {settings.get('store_name', 'N/A')}")
+            print(f"   Print width: {settings.get('print_width', 'N/A')}")
+            print(f"   Auto print: {settings.get('auto_print', False)}")
+        return success, response
+
+    def test_settings_update(self, settings_data):
+        """Test update settings"""
+        success, response = self.run_test(
+            "Update Settings",
+            "PUT",
+            "api/settings",
+            200,
+            data=settings_data
+        )
+        if success:
+            settings = response.get('settings', {})
+            print(f"   Updated print width: {settings.get('print_width', 'N/A')}")
+        return success, response
+
 
 def main():
     print("=" * 60)
@@ -412,6 +498,54 @@ def main():
     print("=" * 60)
     
     tester.test_low_stock_alert()
+    
+    # Test 13: Phase 3 - Ingredient Ledger History
+    print("\n" + "=" * 60)
+    print("PHASE 9: INGREDIENT LEDGER HISTORY (Phase 3)")
+    print("=" * 60)
+    
+    if kopi_id:
+        tester.test_ingredient_ledger(kopi_id, "Kopi Arabica")
+    if susu_id:
+        tester.test_ingredient_ledger(susu_id, "Susu Segar")
+    
+    # Test 14: Phase 3 - Export CSV
+    print("\n" + "=" * 60)
+    print("PHASE 10: EXPORT CSV (Phase 3)")
+    print("=" * 60)
+    
+    tester.test_export_sales_csv()
+    tester.test_export_ingredients_csv()
+    tester.test_export_usage_csv()
+    
+    # Test 15: Phase 3 - Settings (Print Settings)
+    print("\n" + "=" * 60)
+    print("PHASE 11: SETTINGS - PRINT CONFIGURATION (Phase 3)")
+    print("=" * 60)
+    
+    tester.test_settings_get()
+    
+    # Test updating print width
+    tester.test_settings_update({
+        "store_name": "Kedai Kopi Test",
+        "address": "Jl. Test No. 123",
+        "phone": "08123456789",
+        "footer_text": "Terima kasih!",
+        "print_width": "58mm",
+        "show_logo": False,
+        "auto_print": True
+    })
+    
+    # Test switching to 80mm
+    tester.test_settings_update({
+        "store_name": "Kedai Kopi Test",
+        "address": "Jl. Test No. 123",
+        "phone": "08123456789",
+        "footer_text": "Terima kasih!",
+        "print_width": "80mm",
+        "show_logo": False,
+        "auto_print": False
+    })
     
     # Final Summary
     print("\n" + "=" * 60)

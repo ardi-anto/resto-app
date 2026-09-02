@@ -145,3 +145,8 @@ class StoreSettings(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     footer_text: Optional[str] = "Terima kasih!"
+    # Print settings
+    print_width: str = "80mm"  # 58mm or 80mm
+    show_logo: bool = False
+    auto_print: bool = False
+

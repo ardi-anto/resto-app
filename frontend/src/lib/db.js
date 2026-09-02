@@ -1,13 +1,14 @@
 /**
  * IndexedDB using Dexie for offline storage
+ * Version 2: Added sync status tracking
  */
 import Dexie from 'dexie';
 
 export const db = new Dexie('KedaiOpsDB');
 
-db.version(1).stores({
-  // Offline queue for sales
-  pendingSales: '++id, clientId, createdAt, status',
+db.version(2).stores({
+  // Offline queue for sales with enhanced status tracking
+  pendingSales: '++id, clientId, createdAt, status, retryCount, lastRetryAt',
   // Cache for menus (for offline POS)
   cachedMenus: '_id, name, category',
   // Cache for ingredients (for display)

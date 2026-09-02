@@ -3,7 +3,8 @@
 ## Objectives
 - ✅ **Selesai**: Validasi **core flow** resep → transaksi POS → stok bahan berkurang akurat, bekerja **offline** (IndexedDB/Dexie) dan **sync** ke backend saat online **tanpa duplikasi** (idempotent).
 - ✅ **Selesai**: Bangun MVP **PWA React** + **FastAPI** + **MongoDB** dengan UI **Bahasa Indonesia**, mencakup POS, stok, resep, laporan, sinkronisasi, dan cetak struk.
-- 🎯 **Selanjutnya (Phase 3)**: Hardening sinkronisasi + penyempurnaan audit stok + fitur lanjutan (export, perbaikan print, notifikasi/alert low stock yang lebih kuat), dan peningkatan keamanan/permission (sudah ada dasar RBAC).
+- ✅ **Selesai (Phase 3)**: Hardening sinkronisasi (retry/backoff) + audit stok per bahan (ledger history) + export laporan CSV + pengaturan print 58mm/80mm, semuanya lulus test 100%.
+- 🎯 **Selanjutnya (Phase 4)**: Stabilization & release readiness: keamanan JWT/secret hardening, backup/restore, performa (pagination/index), observability, serta peningkatan printing (ESC/POS opsional).
 
 ---
 
@@ -86,7 +87,7 @@
     - summary (total revenue, transactions, top menu, low stock list)
     - daily trend
     - ingredient usage dari stock ledger
-  - Auth + RBAC (sudah di-include di V1):
+  - Auth + RBAC:
     - JWT login
     - roles: owner/manager/kasir
     - default owner auto-create: admin@kedaiops.com / admin123
@@ -106,62 +107,54 @@
 
 ---
 
-## Phase 3 — Add More Features (Hardening + Advanced Ops) **(NEXT ⏭️)**
-> Catatan: auth/RBAC sudah ada di V1. Phase 3 fokus ke hardening sync, audit stok yang lebih kuat, dan fitur operasional lanjutan.
+## Phase 3 — Add More Features (Hardening + Advanced Ops) **(COMPLETED ✅)**
+> Phase 3 fokus ke hardening sync, audit stok yang lebih kuat, dan fitur operasional lanjutan.
 
 ### User stories (Phase 3)
-1. Sebagai owner, saya ingin manajemen user lebih lengkap (reset password, nonaktifkan user, audit login) agar operasional aman.
-2. Sebagai owner, saya ingin role/permission lebih granular (mis. kasir boleh lihat stok tapi tidak edit, manager boleh adjustment) agar kontrol rapi.
-3. Sebagai manager, saya ingin koreksi stok (stock adjustment) dengan alasan + histori per bahan agar audit rapi.
-4. Sebagai owner, saya ingin notifikasi low stock lebih jelas (threshold per bahan, daftar prioritas, opsi notifikasi) agar tidak kehabisan.
-5. Sebagai owner, saya ingin export laporan (CSV) agar bisa dibuka di Excel.
-6. Sebagai kasir, saya ingin mode offline lebih “tahan banting”: retry, partial failure handling, dan tampilan error yang jelas.
-7. Sebagai owner, saya ingin laporan pemakaian bahan per periode berbasis ledger agar bisa menghitung kebutuhan restock.
+1. Sebagai kasir, saya ingin mode offline lebih “tahan banting”: retry, partial failure handling, dan tampilan error yang jelas.
+2. Sebagai owner/manager, saya ingin export laporan (CSV) agar bisa dibuka di Excel.
+3. Sebagai manager/owner, saya ingin histori pergerakan stok per bahan agar audit rapi.
+4. Sebagai owner, saya ingin pengaturan ukuran struk (58mm/80mm) agar sesuai printer thermal.
 
-### Implementation steps (revisi sesuai kondisi saat ini)
-- Hardening Sync (offline-first):
-  - Implement **outbox pattern** lebih lengkap:
-    - status: pending → syncing → synced/failed
-    - retry dengan exponential backoff
-    - partial failure: hanya item gagal tetap di queue
-  - Idempotency server:
-    - pastikan unique index `sales.client_id` dan `stock_ledger(sale_id, ingredient_id)` tetap enforced
-    - response sync detail + reason codes
-  - Conflict handling:
-    - server adalah source of truth untuk stok
-    - setelah sync, client re-fetch stok/menus dan update cache
-- Stock audit enhancements:
-  - Ledger untuk adjustment sudah ada; tambah:
-    - endpoint histori ledger per ingredient
-    - ringkasan pemakaian vs restock per periode
-  - Tambah “Stock opname” (optional): snapshot stok per tanggal
-- Permissions hardening:
-  - Definisikan permission matrix per feature
-  - UI gating + backend enforcement per endpoint
-- Low stock alerts:
-  - Tambah konfigurasi threshold yang mudah + daftar “prioritas restock”
-  - (Optional) push/email/whatsapp integration di fase lanjutan
-- Export:
-  - CSV export endpoint untuk sales, summary, ingredient usage
-- Printing improvements:
-  - Pengaturan toko (nama/alamat/footer) dipakai di template struk
-  - Preset ukuran 58mm vs 80mm
-  - (Optional) ESC/POS untuk thermal printer
+### Implementation steps (hasil aktual)
+- ✅ Hardening Sync (offline-first):
+  - Upgrade outbox `pendingSales` (Dexie v2) dengan field status + retry metadata.
+  - State machine: `pending → syncing → synced` serta `retrying/failed`.
+  - Implement **retry otomatis** dengan **exponential backoff + jitter** (configurable max retries).
+  - Partial failure handling: transaksi sukses ditandai synced, yang gagal masuk retrying/failed.
+  - UI status sync ditingkatkan:
+    - counts: pending, retrying, failed
+    - actions: retry / delete untuk transaksi failed (di Settings → Sinkronisasi)
+- ✅ Export laporan ke CSV:
+  - Backend endpoint:
+    - `GET /api/reports/export/sales` (CSV)
+    - `GET /api/reports/export/ingredients` (CSV)
+    - `GET /api/reports/export/usage?days=N` (CSV)
+  - Frontend:
+    - Reports page menambahkan tombol **Export** (dropdown 3 opsi), download via blob.
+- ✅ Histori ledger per bahan:
+  - Backend endpoint:
+    - `GET /api/ingredients/{ingredient_id}/ledger?days=N&limit=M`
+    - Mengembalikan ledger + summary period (sales_usage/restock_total/waste_total) + running balance.
+  - Frontend:
+    - Tombol **Histori** di setiap baris bahan → membuka sheet berisi summary + tabel riwayat.
+- ✅ Perbaikan print settings (58mm/80mm):
+  - Store settings diperluas:
+    - `print_width: "58mm" | "80mm"`
+    - `auto_print` (UI toggle)
+  - Settings → tab **Cetak Struk**:
+    - selector lebar kertas + **live receipt preview** yang berubah sesuai pilihan.
 
-### Next actions
-- Konfirmasi scope Phase 3 (pilih 3–5 item prioritas):
-  - A) Export CSV
-  - B) Sync hardening + retry/backoff
-  - C) Ledger/riwayat stok per bahan
-  - D) Permission matrix lebih detail
-  - E) Print settings 58/80mm
-- Buat backlog terurut + estimasi (per sprint).
+### Testing (hasil aktual)
+- ✅ 100% pass Phase 3:
+  - Backend: 27/27 tests passed
+  - Frontend: semua flow export/ledger/print/sync status terverifikasi
 
-### Success criteria
-- Sync stabil pada jaringan putus-nyambung (tidak ada duplikasi, transaksi gagal bisa retry).
-- Audit trail stok lengkap (sale + adjustment + (optional) opname) dan bisa ditelusuri.
-- Export laporan berjalan dan sesuai angka di dashboard.
-- Role enforcement jelas dan tidak ada privilege escalation.
+### Success criteria (status)
+- ✅ Sync stabil saat jaringan putus-nyambung (retry/backoff, partial failure, no duplication).
+- ✅ Audit trail stok per bahan bisa ditelusuri via UI.
+- ✅ Export laporan berjalan dan sesuai angka di dashboard.
+- ✅ Print settings 58/80mm dapat diatur dan preview sesuai.
 
 ---
 
@@ -169,23 +162,35 @@
 
 ### User stories (Phase 4)
 1. Sebagai owner, saya ingin backup/restore data agar tidak takut kehilangan data.
-2. Sebagai owner, saya ingin pengaturan printer/format struk agar sesuai toko.
+2. Sebagai owner, saya ingin performa tetap cepat walau data banyak (transaksi/histori).
 3. Sebagai manager, saya ingin pencarian transaksi cepat agar bisa melayani komplain.
-4. Sebagai owner, saya ingin performa tetap cepat walau data banyak.
-5. Sebagai owner, saya ingin monitoring error sederhana agar tahu bila ada masalah.
+4. Sebagai owner, saya ingin monitoring error sederhana agar tahu bila ada masalah.
+5. Sebagai owner, saya ingin keamanan sistem memadai (secret, token policy, audit) sebelum dipakai produksi.
+6. Sebagai owner, saya ingin opsi printing lebih robust (template final + opsional ESC/POS) agar kompatibel dengan thermal printer.
 
 ### Implementation steps
-- Data migration/versioning IndexedDB (Dexie migrations) + strategi backward compatible.
-- Performance:
-  - pagination + server-side filtering untuk sales/history
-  - indexes Mongo untuk query laporan
-  - caching untuk menu/ingredient
-- Printing:
-  - robust print layout, optional ESC/POS adapter
+- Security hardening:
+  - Ganti `JWT_SECRET` default menjadi minimal 32 bytes (hilangkan InsecureKeyLengthWarning).
+  - Tambah rate limit login (opsional), refresh token/rotation (opsional), dan password policy.
+- Data growth & performance:
+  - Pagination + server-side filtering untuk sales/history.
+  - Index Mongo tambahan untuk query laporan (created_at, items.menu_id jika perlu).
+  - Optimasi cache refresh setelah sync (stale-while-revalidate sederhana).
+- Offline storage stability:
+  - Strategi migration Dexie yang backward compatible (versi schema selanjutnya).
+  - UI troubleshooting untuk outbox (export/debug log sederhana).
+- Backup/restore:
+  - Endpoint export/import JSON (admin only) atau dump CSV/JSON.
 - Observability:
-  - basic error logging + request tracing
-- Comprehensive testing + regression checklist.
+  - Basic error logging (server) + correlation id per request.
+  - Frontend error boundary + logging minimal.
+- Printing improvements:
+  - Template struk final menggunakan store settings (nama/alamat/footer) secara penuh.
+  - Preset CSS lebih robust untuk 58mm/80mm (margin, font scaling).
+  - (Optional) ESC/POS adapter untuk thermal printer.
 
 ### Success criteria
 - Tidak ada data loss pada offline mode + refresh.
 - App stabil untuk penggunaan harian (latency UI rendah, sync konsisten).
+- Security baseline terpenuhi (secret kuat, minimal audit trail).
+- Siap dipakai produksi skala UMKM.

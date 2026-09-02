@@ -1,8 +1,8 @@
 /**
- * Settings Page
+ * Settings Page with Print Settings
  */
 import React, { useState, useEffect } from 'react';
-import { Settings, Store, Users, RefreshCw, Loader2, Plus, Pencil, Shield } from 'lucide-react';
+import { Settings, Store, Users, RefreshCw, Loader2, Plus, Pencil, Shield, Printer, AlertCircle, RotateCcw, Trash2 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -14,6 +14,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
+import { Separator } from '../components/ui/separator';
+import { Alert, AlertDescription } from '../components/ui/alert';
 import { settingsAPI, usersAPI, authAPI } from '../lib/api';
 import { useSync } from '../contexts/SyncContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -24,12 +26,15 @@ export function SettingsPage() {
     store_name: '',
     address: '',
     phone: '',
-    footer_text: ''
+    footer_text: '',
+    print_width: '80mm',
+    show_logo: false,
+    auto_print: false
   });
   const [users, setUsers] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const { isOnline, pendingCount, isSyncing, syncNow, lastSyncResult } = useSync();
+  const { isOnline, pendingCount, retryingCount, failedCount, isSyncing, syncNow, lastSyncResult, getFailedSales, retrySale, deleteSale } = useSync();
   const { user: currentUser, hasRole } = useAuth();
   
   // User dialog
@@ -41,9 +46,19 @@ export function SettingsPage() {
     role: 'kasir'
   });
 
+  // Failed sales
+  const [failedSales, setFailedSales] = useState([]);
+  const [showFailedSales, setShowFailedSales] = useState(false);
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (failedCount > 0) {
+      loadFailedSales();
+    }
+  }, [failedCount]);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -52,7 +67,15 @@ export function SettingsPage() {
         settingsAPI.get(),
         hasRole('owner', 'manager') ? usersAPI.list() : Promise.resolve({ data: { users: [] } })
       ]);
-      setStoreSettings(settingsRes.data.settings || {});
+      setStoreSettings(settingsRes.data.settings || {
+        store_name: '',
+        address: '',
+        phone: '',
+        footer_text: '',
+        print_width: '80mm',
+        show_logo: false,
+        auto_print: false
+      });
       setUsers(usersRes.data.users || []);
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -60,6 +83,11 @@ export function SettingsPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const loadFailedSales = async () => {
+    const sales = await getFailedSales();
+    setFailedSales(sales);
   };
 
   const handleSaveSettings = async () => {
@@ -93,7 +121,6 @@ export function SettingsPage() {
 
     try {
       if (userDialog.user) {
-        // Update user
         await usersAPI.update(userDialog.user._id, {
           name: userForm.name,
           role: userForm.role,
@@ -101,7 +128,6 @@ export function SettingsPage() {
         });
         toast.success('User berhasil diperbarui');
       } else {
-        // Create user
         await authAPI.register(userForm);
         toast.success('User berhasil ditambahkan');
       }
@@ -128,7 +154,20 @@ export function SettingsPage() {
     const result = await syncNow();
     if (result) {
       toast.success(`Sinkronisasi selesai. ${result.sales?.synced || 0} transaksi tersinkron.`);
+      loadFailedSales();
     }
+  };
+
+  const handleRetrySale = async (saleId) => {
+    await retrySale(saleId);
+    toast.info('Transaksi akan dicoba ulang');
+    loadFailedSales();
+  };
+
+  const handleDeleteSale = async (saleId) => {
+    await deleteSale(saleId);
+    toast.success('Transaksi dihapus');
+    loadFailedSales();
   };
 
   return (
@@ -149,9 +188,16 @@ export function SettingsPage() {
             <Store className="h-4 w-4 mr-2" />
             Toko
           </TabsTrigger>
+          <TabsTrigger value="print">
+            <Printer className="h-4 w-4 mr-2" />
+            Cetak Struk
+          </TabsTrigger>
           <TabsTrigger value="sync">
             <RefreshCw className="h-4 w-4 mr-2" />
             Sinkronisasi
+            {(pendingCount + retryingCount) > 0 && (
+              <Badge variant="secondary" className="ml-2">{pendingCount + retryingCount}</Badge>
+            )}
           </TabsTrigger>
           {hasRole('owner', 'manager') && (
             <TabsTrigger value="users">
@@ -225,6 +271,103 @@ export function SettingsPage() {
           </Card>
         </TabsContent>
 
+        {/* Print Settings */}
+        <TabsContent value="print">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg" style={{ fontFamily: 'var(--font-display)' }}>
+                Pengaturan Cetak Struk
+              </CardTitle>
+              <CardDescription>
+                Sesuaikan ukuran dan tampilan struk
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="space-y-3">
+                <Label>Lebar Kertas Struk</Label>
+                <Select 
+                  value={storeSettings.print_width || '80mm'} 
+                  onValueChange={(v) => setStoreSettings(prev => ({ ...prev, print_width: v }))}
+                  data-testid="settings-print-width-select"
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="58mm">58mm (Printer Thermal Kecil)</SelectItem>
+                    <SelectItem value="80mm">80mm (Printer Thermal Standar)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Pilih sesuai jenis printer thermal yang Anda gunakan
+                </p>
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Auto Print Setelah Checkout</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Otomatis membuka dialog cetak setelah transaksi selesai
+                  </p>
+                </div>
+                <Switch
+                  checked={storeSettings.auto_print || false}
+                  onCheckedChange={(checked) => setStoreSettings(prev => ({ ...prev, auto_print: checked }))}
+                  data-testid="settings-auto-print-switch"
+                />
+              </div>
+
+              <Separator />
+
+              {/* Receipt Preview */}
+              <div className="space-y-3">
+                <Label>Preview Struk</Label>
+                <div 
+                  className="border rounded-lg p-4 bg-white text-black font-mono text-xs mx-auto"
+                  style={{ 
+                    width: storeSettings.print_width === '58mm' ? '180px' : '240px',
+                    transition: 'width 0.3s ease'
+                  }}
+                  data-testid="receipt-preview"
+                >
+                  <div className="text-center border-b border-dashed pb-2 mb-2">
+                    <p className="font-bold">{storeSettings.store_name || 'KEDAI KOPI'}</p>
+                    {storeSettings.address && <p className="text-[10px]">{storeSettings.address}</p>}
+                    {storeSettings.phone && <p className="text-[10px]">{storeSettings.phone}</p>}
+                  </div>
+                  <div className="space-y-1 border-b border-dashed pb-2 mb-2">
+                    <div className="flex justify-between">
+                      <span>Americano</span>
+                      <span>1 x 25.000</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Kopi Susu</span>
+                      <span>2 x 30.000</span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between font-bold">
+                    <span>TOTAL</span>
+                    <span>Rp 85.000</span>
+                  </div>
+                  <p className="text-center text-[10px] mt-2 text-gray-500">
+                    {storeSettings.footer_text || 'Terima kasih!'}
+                  </p>
+                </div>
+              </div>
+
+              <Button onClick={handleSaveSettings} disabled={isSaving}>
+                {isSaving ? (
+                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Menyimpan...</>
+                ) : (
+                  'Simpan Pengaturan Cetak'
+                )}
+              </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
         {/* Sync Settings */}
         <TabsContent value="sync">
           <Card>
@@ -233,7 +376,7 @@ export function SettingsPage() {
                 Status Sinkronisasi
               </CardTitle>
               <CardDescription>
-                Kelola sinkronisasi data offline
+                Kelola sinkronisasi data offline dengan retry otomatis
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -249,16 +392,19 @@ export function SettingsPage() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-between p-4 rounded-lg bg-secondary">
-                <div>
-                  <p className="font-medium">Transaksi Pending</p>
-                  <p className="text-sm text-muted-foreground">
-                    Transaksi yang belum tersinkron ke server
-                  </p>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="p-4 rounded-lg bg-secondary text-center">
+                  <p className="text-2xl font-semibold tabular-nums">{pendingCount}</p>
+                  <p className="text-xs text-muted-foreground">Pending</p>
                 </div>
-                <Badge variant={pendingCount > 0 ? 'default' : 'secondary'}>
-                  {pendingCount}
-                </Badge>
+                <div className="p-4 rounded-lg bg-amber-100 text-center">
+                  <p className="text-2xl font-semibold tabular-nums text-amber-700">{retryingCount}</p>
+                  <p className="text-xs text-amber-600">Retrying</p>
+                </div>
+                <div className="p-4 rounded-lg bg-red-100 text-center">
+                  <p className="text-2xl font-semibold tabular-nums text-red-700">{failedCount}</p>
+                  <p className="text-xs text-red-600">Gagal</p>
+                </div>
               </div>
 
               {lastSyncResult && (
@@ -267,7 +413,75 @@ export function SettingsPage() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Tersinkron: {lastSyncResult.sales?.synced || 0}, 
                     Gagal: {lastSyncResult.sales?.failed || 0}
+                    {lastSyncResult.sales?.retrying > 0 && `, Akan dicoba ulang: ${lastSyncResult.sales.retrying}`}
                   </p>
+                </div>
+              )}
+
+              {/* Failed Sales Section */}
+              {failedCount > 0 && (
+                <Alert variant="destructive">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>
+                    Ada {failedCount} transaksi gagal sinkronisasi.
+                    <Button 
+                      variant="link" 
+                      className="h-auto p-0 ml-2" 
+                      onClick={() => setShowFailedSales(!showFailedSales)}
+                    >
+                      {showFailedSales ? 'Sembunyikan' : 'Lihat Detail'}
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {showFailedSales && failedSales.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>ID</TableHead>
+                        <TableHead>Total</TableHead>
+                        <TableHead>Error</TableHead>
+                        <TableHead className="text-right">Aksi</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {failedSales.map(sale => (
+                        <TableRow key={sale.id}>
+                          <TableCell className="font-mono text-xs">
+                            {sale.clientId?.slice(0, 12)}...
+                          </TableCell>
+                          <TableCell>
+                            Rp {sale.data?.total?.toLocaleString('id-ID')}
+                          </TableCell>
+                          <TableCell className="text-xs text-red-600 max-w-[200px] truncate">
+                            {sale.errorMessage || 'Unknown error'}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-8 w-8"
+                                onClick={() => handleRetrySale(sale.id)}
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-8 w-8 text-destructive"
+                                onClick={() => handleDeleteSale(sale.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
               )}
 

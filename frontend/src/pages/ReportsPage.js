@@ -1,14 +1,15 @@
 /**
- * Reports Dashboard Page
+ * Reports Dashboard Page with Export functionality
  */
 import React, { useState, useEffect } from 'react';
-import { BarChart3, TrendingUp, DollarSign, ShoppingBag, AlertTriangle, Loader2, Calendar } from 'lucide-react';
+import { BarChart3, TrendingUp, DollarSign, ShoppingBag, AlertTriangle, Loader2, Calendar, Download, FileSpreadsheet } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Skeleton } from '../components/ui/skeleton';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '../components/ui/dropdown-menu';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { reportsAPI } from '../lib/api';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
@@ -19,6 +20,7 @@ export function ReportsPage() {
   const [summary, setSummary] = useState(null);
   const [dailyData, setDailyData] = useState([]);
   const [usageData, setUsageData] = useState([]);
+  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     fetchReports();
@@ -66,6 +68,53 @@ export function ReportsPage() {
     return value.toString();
   };
 
+  // Export handlers
+  const handleExport = async (type) => {
+    setIsExporting(true);
+    try {
+      const days = parseInt(period);
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - days);
+
+      let response;
+      let filename;
+
+      switch (type) {
+        case 'sales':
+          response = await reportsAPI.exportSales(startDate.toISOString(), new Date().toISOString());
+          filename = `penjualan_${days}hari.csv`;
+          break;
+        case 'ingredients':
+          response = await reportsAPI.exportIngredients();
+          filename = 'stok_bahan.csv';
+          break;
+        case 'usage':
+          response = await reportsAPI.exportUsage(days);
+          filename = `pemakaian_bahan_${days}hari.csv`;
+          break;
+        default:
+          return;
+      }
+
+      // Download the file
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      toast.success(`Export ${type} berhasil diunduh`);
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Gagal mengexport data');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -78,18 +127,50 @@ export function ReportsPage() {
             Pantau performa penjualan dan pemakaian bahan
           </p>
         </div>
-        <Select value={period} onValueChange={setPeriod} data-testid="reports-date-range">
-          <SelectTrigger className="w-40">
-            <Calendar className="h-4 w-4 mr-2" />
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="7">7 hari terakhir</SelectItem>
-            <SelectItem value="14">14 hari terakhir</SelectItem>
-            <SelectItem value="30">30 hari terakhir</SelectItem>
-            <SelectItem value="60">60 hari terakhir</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex items-center gap-2">
+          <Select value={period} onValueChange={setPeriod} data-testid="reports-date-range">
+            <SelectTrigger className="w-40">
+              <Calendar className="h-4 w-4 mr-2" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7">7 hari terakhir</SelectItem>
+              <SelectItem value="14">14 hari terakhir</SelectItem>
+              <SelectItem value="30">30 hari terakhir</SelectItem>
+              <SelectItem value="60">60 hari terakhir</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Export Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={isExporting} data-testid="export-button">
+                {isExporting ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4 mr-2" />
+                )}
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Export ke CSV</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => handleExport('sales')}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Laporan Penjualan
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('ingredients')}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Data Stok Bahan
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport('usage')}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Pemakaian Bahan
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
       </div>
 
       {/* KPI Cards */}

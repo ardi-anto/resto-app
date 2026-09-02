@@ -1,34 +1,22 @@
 [
   {
-    "content": "Phase 1: Core POC - Buat test script untuk validasi recipe-stock deduction + idempotency",
+    "content": "Phase 3: Hardening sync dengan retry/backoff",
     "status": "completed"
   },
   {
-    "content": "Phase 1: Core POC - Jalankan test dan fix sampai berhasil",
+    "content": "Phase 3: Export laporan ke CSV",
     "status": "completed"
   },
   {
-    "content": "Phase 1: Core POC - Validasi offline/sync logic design",
+    "content": "Phase 3: Histori ledger per bahan",
     "status": "completed"
   },
   {
-    "content": "Phase 2: V1 App - Design Agent untuk UI guidelines",
+    "content": "Phase 3: Perbaikan print settings (58mm/80mm)",
     "status": "completed"
   },
   {
-    "content": "Phase 2: V1 App - Backend Implementation (CRUD + Sync + Reports)",
-    "status": "completed"
-  },
-  {
-    "content": "Phase 2: V1 App - Frontend Implementation (PWA + POS + Offline)",
-    "status": "completed"
-  },
-  {
-    "content": "Phase 2: V1 App - End to End Testing",
-    "status": "completed"
-  },
-  {
-    "content": "Phase 2: All user stories covered in Development and testing",
+    "content": "Phase 3: End to End Testing",
     "status": "completed"
   }
 ]

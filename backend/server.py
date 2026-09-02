@@ -2,6 +2,8 @@
 KedaiOps - Coffee Shop POS & Stock Management API
 """
 import os
+import io
+import csv
 import jwt
 import bcrypt
 from datetime import datetime, timedelta
@@ -11,6 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import StreamingResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -639,6 +642,214 @@ async def update_settings(data: StoreSettings, user: dict = Depends(require_role
     )
     settings = await db.settings.find_one({"type": "store"})
     return {"settings": serialize_doc(settings)}
+
+
+# ============ INGREDIENT LEDGER ENDPOINTS ============
+@app.get("/api/ingredients/{ingredient_id}/ledger")
+async def get_ingredient_ledger(
+    ingredient_id: str,
+    days: int = Query(30, le=365),
+    limit: int = Query(100, le=500)
+):
+    """Get stock ledger history for a specific ingredient"""
+    ingredient = await db.ingredients.find_one({"_id": ObjectId(ingredient_id)})
+    if not ingredient:
+        raise HTTPException(404, "Bahan tidak ditemukan")
+    
+    start_date = datetime.utcnow() - timedelta(days=days)
+    
+    ledger = await db.stock_ledger.find({
+        "ingredient_id": ingredient_id,
+        "created_at": {"$gte": start_date}
+    }).sort("created_at", -1).limit(limit).to_list(limit)
+    
+    # Calculate running balance (newest to oldest, so reverse for calculation)
+    current_stock = ingredient["stock_qty"]
+    ledger_with_balance = []
+    
+    # Start from current stock and work backwards
+    running_balance = current_stock
+    for entry in ledger:
+        entry["balance_after"] = running_balance
+        running_balance -= entry["delta_qty"]  # Reverse the change to get balance before
+        entry["balance_before"] = running_balance
+        ledger_with_balance.append(entry)
+    
+    # Summary stats
+    sales_total = sum(abs(e["delta_qty"]) for e in ledger if e.get("type") == "sale")
+    adjustments = [e for e in ledger if e.get("type") == "adjustment"]
+    restock_total = sum(e["delta_qty"] for e in adjustments if e["delta_qty"] > 0)
+    waste_total = sum(abs(e["delta_qty"]) for e in adjustments if e["delta_qty"] < 0)
+    
+    return {
+        "ingredient": serialize_doc(ingredient),
+        "ledger": serialize_doc(ledger_with_balance),
+        "summary": {
+            "period_days": days,
+            "total_entries": len(ledger),
+            "sales_usage": sales_total,
+            "restock_total": restock_total,
+            "waste_total": waste_total,
+            "current_stock": current_stock
+        }
+    }
+
+
+# ============ EXPORT ENDPOINTS ============
+@app.get("/api/reports/export/sales")
+async def export_sales_csv(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: dict = Depends(require_role("owner", "manager"))
+):
+    """Export sales data to CSV"""
+    query = {}
+    if start_date:
+        query["created_at"] = {"$gte": datetime.fromisoformat(start_date)}
+    if end_date:
+        if "created_at" in query:
+            query["created_at"]["$lte"] = datetime.fromisoformat(end_date)
+        else:
+            query["created_at"] = {"$lte": datetime.fromisoformat(end_date)}
+    
+    sales = await db.sales.find(query).sort("created_at", -1).to_list(10000)
+    
+    # Create CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        "Tanggal", "ID Transaksi", "Item", "Jumlah Item", 
+        "Total (Rp)", "Metode Bayar", "Catatan", "Device ID"
+    ])
+    
+    # Data rows
+    for sale in sales:
+        items_str = "; ".join([f"{item['menu_name']} x{item['qty']}" for item in sale.get("items", [])])
+        total_items = sum(item["qty"] for item in sale.get("items", []))
+        
+        writer.writerow([
+            sale["created_at"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(sale["created_at"], datetime) else sale["created_at"],
+            sale.get("client_id", ""),
+            items_str,
+            total_items,
+            sale.get("total", 0),
+            sale.get("payment_method", ""),
+            sale.get("notes", ""),
+            sale.get("device_id", "")
+        ])
+    
+    output.seek(0)
+    
+    filename = f"penjualan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.get("/api/reports/export/ingredients")
+async def export_ingredients_csv(
+    user: dict = Depends(require_role("owner", "manager"))
+):
+    """Export ingredients/stock data to CSV"""
+    ingredients = await db.ingredients.find().sort("name", 1).to_list(1000)
+    
+    # Create CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        "Nama Bahan", "Satuan", "Stok Saat Ini", "Batas Minimum", 
+        "Status", "Harga per Satuan (Rp)"
+    ])
+    
+    # Data rows
+    for ing in ingredients:
+        status = "HABIS" if ing["stock_qty"] == 0 else (
+            "MENIPIS" if ing["stock_qty"] <= ing.get("low_stock_threshold", 0) else "CUKUP"
+        )
+        
+        writer.writerow([
+            ing["name"],
+            ing["unit"],
+            ing["stock_qty"],
+            ing.get("low_stock_threshold", 0),
+            status,
+            ing.get("price_per_unit", 0)
+        ])
+    
+    output.seek(0)
+    
+    filename = f"stok_bahan_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.get("/api/reports/export/usage")
+async def export_usage_csv(
+    days: int = Query(30, le=365),
+    user: dict = Depends(require_role("owner", "manager"))
+):
+    """Export ingredient usage history to CSV"""
+    start_date = datetime.utcnow() - timedelta(days=days)
+    
+    # Get all ledger entries
+    ledger = await db.stock_ledger.find({
+        "created_at": {"$gte": start_date}
+    }).sort("created_at", -1).to_list(10000)
+    
+    # Enrich with ingredient names
+    ingredients_cache = {}
+    for entry in ledger:
+        ing_id = entry.get("ingredient_id")
+        if ing_id and ing_id not in ingredients_cache:
+            ing = await db.ingredients.find_one({"_id": ObjectId(ing_id)})
+            if ing:
+                ingredients_cache[ing_id] = {"name": ing["name"], "unit": ing["unit"]}
+    
+    # Create CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow([
+        "Tanggal", "Bahan", "Satuan", "Perubahan", "Tipe", 
+        "Alasan", "Catatan", "ID Transaksi/User"
+    ])
+    
+    # Data rows
+    for entry in ledger:
+        ing_info = ingredients_cache.get(entry.get("ingredient_id"), {"name": "Unknown", "unit": ""})
+        entry_type = entry.get("type", "unknown")
+        reason = entry.get("reason", "-") if entry_type == "adjustment" else "-"
+        ref_id = entry.get("sale_id", entry.get("user_name", "-"))
+        
+        writer.writerow([
+            entry["created_at"].strftime("%Y-%m-%d %H:%M:%S") if isinstance(entry["created_at"], datetime) else entry["created_at"],
+            ing_info["name"],
+            ing_info["unit"],
+            entry.get("delta_qty", 0),
+            "Penjualan" if entry_type == "sale" else "Penyesuaian",
+            reason,
+            entry.get("notes", ""),
+            ref_id
+        ])
+    
+    output.seek(0)
+    
+    filename = f"pemakaian_bahan_{days}hari_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 if __name__ == "__main__":

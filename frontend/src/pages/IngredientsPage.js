@@ -1,22 +1,26 @@
 /**
- * Ingredients/Stock Management Page
+ * Ingredients/Stock Management Page with Ledger History
  */
 import React, { useState, useEffect } from 'react';
-import { Plus, Pencil, Trash2, Search, Package, Loader2, AlertTriangle, TrendingDown, TrendingUp } from 'lucide-react';
+import { Plus, Pencil, Trash2, Search, Package, Loader2, AlertTriangle, TrendingDown, TrendingUp, History, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from '../components/ui/sheet';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter, SheetDescription } from '../components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
 import { Progress } from '../components/ui/progress';
+import { ScrollArea } from '../components/ui/scroll-area';
+import { Separator } from '../components/ui/separator';
 import { ingredientsAPI } from '../lib/api';
 import { toast } from 'sonner';
 import { cn } from '../lib/utils';
+import { format } from 'date-fns';
+import { id } from 'date-fns/locale';
 
 export function IngredientsPage() {
   const [ingredients, setIngredients] = useState([]);
@@ -42,6 +46,11 @@ export function IngredientsPage() {
   
   // Delete dialog
   const [deleteDialog, setDeleteDialog] = useState({ open: false, ingredient: null });
+
+  // Ledger history sheet
+  const [ledgerSheet, setLedgerSheet] = useState({ open: false, ingredient: null });
+  const [ledgerData, setLedgerData] = useState({ ledger: [], summary: null, isLoading: false });
+  const [ledgerDays, setLedgerDays] = useState('30');
 
   useEffect(() => {
     fetchIngredients();
@@ -165,6 +174,36 @@ export function IngredientsPage() {
     }
   };
 
+  // Fetch ledger history
+  const fetchLedger = async (ingredientId, days) => {
+    setLedgerData(prev => ({ ...prev, isLoading: true }));
+    try {
+      const response = await ingredientsAPI.getLedger(ingredientId, days);
+      setLedgerData({
+        ledger: response.data.ledger,
+        summary: response.data.summary,
+        ingredient: response.data.ingredient,
+        isLoading: false
+      });
+    } catch (error) {
+      console.error('Error fetching ledger:', error);
+      toast.error('Gagal memuat histori stok');
+      setLedgerData(prev => ({ ...prev, isLoading: false }));
+    }
+  };
+
+  const openLedgerSheet = (ingredient) => {
+    setLedgerSheet({ open: true, ingredient });
+    fetchLedger(ingredient._id, parseInt(ledgerDays));
+  };
+
+  const handleLedgerDaysChange = (days) => {
+    setLedgerDays(days);
+    if (ledgerSheet.ingredient) {
+      fetchLedger(ledgerSheet.ingredient._id, parseInt(days));
+    }
+  };
+
   const getStockStatus = (ing) => {
     if (ing.stock_qty === 0) return 'empty';
     if (ing.stock_qty <= ing.low_stock_threshold) return 'low';
@@ -173,8 +212,13 @@ export function IngredientsPage() {
 
   const getStockPercentage = (ing) => {
     if (ing.low_stock_threshold === 0) return 100;
-    const maxStock = ing.low_stock_threshold * 5; // Assume max is 5x threshold
+    const maxStock = ing.low_stock_threshold * 5;
     return Math.min(100, (ing.stock_qty / maxStock) * 100);
+  };
+
+  const formatDate = (dateStr) => {
+    const date = new Date(dateStr);
+    return format(date, 'dd MMM yyyy, HH:mm', { locale: id });
   };
 
   return (
@@ -327,6 +371,15 @@ export function IngredientsPage() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => openLedgerSheet(ing)}
+                            data-testid="ingredient-history-button"
+                          >
+                            <History className="h-4 w-4 mr-1" />
+                            Histori
+                          </Button>
                           <Button 
                             variant="outline" 
                             size="sm"
@@ -542,6 +595,132 @@ export function IngredientsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Ledger History Sheet */}
+      <Sheet open={ledgerSheet.open} onOpenChange={(open) => setLedgerSheet({ open, ingredient: null })}>
+        <SheetContent className="w-full sm:max-w-xl" data-testid="ingredient-ledger-sheet">
+          <SheetHeader>
+            <SheetTitle style={{ fontFamily: 'var(--font-display)' }}>
+              <History className="inline-block h-5 w-5 mr-2" />
+              Histori Stok: {ledgerSheet.ingredient?.name}
+            </SheetTitle>
+            <SheetDescription>
+              Riwayat perubahan stok dari penjualan dan penyesuaian
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="py-4 space-y-4">
+            {/* Period Selector */}
+            <div className="flex items-center justify-between">
+              <Select value={ledgerDays} onValueChange={handleLedgerDaysChange}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="7">7 hari terakhir</SelectItem>
+                  <SelectItem value="14">14 hari terakhir</SelectItem>
+                  <SelectItem value="30">30 hari terakhir</SelectItem>
+                  <SelectItem value="60">60 hari terakhir</SelectItem>
+                  <SelectItem value="90">90 hari terakhir</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Summary Cards */}
+            {ledgerData.summary && (
+              <div className="grid grid-cols-3 gap-3">
+                <Card>
+                  <CardContent className="p-3 text-center">
+                    <ArrowDownCircle className="h-5 w-5 mx-auto mb-1 text-destructive" />
+                    <p className="text-xs text-muted-foreground">Penjualan</p>
+                    <p className="font-semibold tabular-nums">
+                      {ledgerData.summary.sales_usage?.toLocaleString('id-ID')}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3 text-center">
+                    <ArrowUpCircle className="h-5 w-5 mx-auto mb-1 text-accent" />
+                    <p className="text-xs text-muted-foreground">Restok</p>
+                    <p className="font-semibold tabular-nums">
+                      {ledgerData.summary.restock_total?.toLocaleString('id-ID')}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3 text-center">
+                    <AlertTriangle className="h-5 w-5 mx-auto mb-1 text-amber-500" />
+                    <p className="text-xs text-muted-foreground">Terbuang</p>
+                    <p className="font-semibold tabular-nums">
+                      {ledgerData.summary.waste_total?.toLocaleString('id-ID')}
+                    </p>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+
+            <Separator />
+
+            {/* Ledger Table */}
+            <ScrollArea className="h-[400px]">
+              {ledgerData.isLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : ledgerData.ledger.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <History className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                  <p>Belum ada histori di periode ini</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Waktu</TableHead>
+                      <TableHead>Tipe</TableHead>
+                      <TableHead className="text-right">Perubahan</TableHead>
+                      <TableHead className="text-right">Saldo</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {ledgerData.ledger.map((entry, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell className="text-xs">
+                          {formatDate(entry.created_at)}
+                        </TableCell>
+                        <TableCell>
+                          {entry.type === 'sale' ? (
+                            <Badge variant="secondary" className="text-xs">Penjualan</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-xs capitalize">
+                              {entry.reason || 'Penyesuaian'}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className={cn(
+                          "text-right font-medium tabular-nums",
+                          entry.delta_qty > 0 ? "text-accent" : "text-destructive"
+                        )}>
+                          {entry.delta_qty > 0 ? '+' : ''}{entry.delta_qty?.toLocaleString('id-ID')}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {entry.balance_after?.toLocaleString('id-ID')}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </ScrollArea>
+          </div>
+
+          <SheetFooter>
+            <Button variant="outline" onClick={() => setLedgerSheet({ open: false, ingredient: null })}>
+              Tutup
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       {/* Delete Confirmation */}
       <Dialog open={deleteDialog.open} onOpenChange={(open) => setDeleteDialog({ open, ingredient: null })}>

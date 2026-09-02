@@ -1,5 +1,5 @@
 /**
- * Offline sync manager
+ * Offline sync manager with retry/backoff
  */
 import db from './db';
 import { salesAPI, menusAPI, ingredientsAPI } from './api';
@@ -11,10 +11,45 @@ const DEVICE_ID = localStorage.getItem('kedaiops_device_id') || (() => {
   return id;
 })();
 
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 5,
+  baseDelay: 1000, // 1 second
+  maxDelay: 60000, // 1 minute
+  backoffMultiplier: 2,
+};
+
+// Calculate exponential backoff delay
+function getBackoffDelay(retryCount) {
+  const delay = Math.min(
+    RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, retryCount),
+    RETRY_CONFIG.maxDelay
+  );
+  // Add jitter (±20%)
+  const jitter = delay * 0.2 * (Math.random() * 2 - 1);
+  return Math.round(delay + jitter);
+}
+
 export const syncManager = {
+  // Sync state
+  _syncInProgress: false,
+  _retryTimeout: null,
+  _listeners: new Set(),
+
   // Check online status
   isOnline: () => navigator.onLine,
   
+  // Add listener for sync events
+  addListener(callback) {
+    this._listeners.add(callback);
+    return () => this._listeners.delete(callback);
+  },
+
+  // Notify listeners
+  _notify(event, data) {
+    this._listeners.forEach(cb => cb(event, data));
+  },
+
   // Add sale to offline queue
   async addPendingSale(saleData) {
     const clientId = `sale_${uuidv4()}`;
@@ -28,9 +63,13 @@ export const syncManager = {
       },
       createdAt: new Date(),
       status: 'pending',
+      retryCount: 0,
+      lastRetryAt: null,
+      errorMessage: null,
     };
     
     await db.pendingSales.add(pendingSale);
+    this._notify('sale_added', pendingSale);
     
     // Try to sync immediately if online
     if (this.isOnline()) {
@@ -40,27 +79,100 @@ export const syncManager = {
     return pendingSale;
   },
   
-  // Sync pending sales to server
+  // Sync pending sales to server with retry logic
   async syncPendingSales() {
-    const pending = await db.pendingSales
-      .where('status')
-      .equals('pending')
-      .toArray();
-    
-    if (pending.length === 0) return { synced: 0, failed: 0 };
-    
+    if (this._syncInProgress) {
+      console.log('Sync already in progress, skipping...');
+      return null;
+    }
+
+    if (!this.isOnline()) {
+      console.log('Offline, skipping sync');
+      return null;
+    }
+
+    this._syncInProgress = true;
+    this._notify('sync_start', null);
+
     try {
-      const salesData = pending.map(p => p.data);
+      // Get pending sales that are ready to retry
+      const now = new Date();
+      const pending = await db.pendingSales
+        .where('status')
+        .anyOf(['pending', 'retrying'])
+        .toArray();
+
+      // Filter out items that need to wait for backoff
+      const readyToSync = pending.filter(sale => {
+        if (sale.status === 'pending') return true;
+        if (sale.retryCount >= RETRY_CONFIG.maxRetries) {
+          // Mark as failed after max retries
+          db.pendingSales.update(sale.id, { status: 'failed' });
+          return false;
+        }
+        // Check backoff time
+        if (sale.lastRetryAt) {
+          const backoffDelay = getBackoffDelay(sale.retryCount);
+          const nextRetryTime = new Date(sale.lastRetryAt).getTime() + backoffDelay;
+          return now.getTime() >= nextRetryTime;
+        }
+        return true;
+      });
+    
+      if (readyToSync.length === 0) {
+        this._notify('sync_complete', { synced: 0, failed: 0 });
+        return { synced: 0, failed: 0 };
+      }
+
+      // Mark items as syncing
+      for (const sale of readyToSync) {
+        await db.pendingSales.update(sale.id, { 
+          status: 'syncing',
+          lastRetryAt: new Date()
+        });
+      }
+
+      // Try to sync
+      const salesData = readyToSync.map(p => p.data);
       const response = await salesAPI.sync(salesData);
       
+      let syncedCount = 0;
+      let failedCount = 0;
+      let retryingCount = 0;
+
       // Update status based on results
       for (const result of response.data.results) {
-        const sale = pending.find(p => p.data.client_id === result.client_id);
+        const sale = readyToSync.find(p => p.data.client_id === result.client_id);
         if (sale) {
-          await db.pendingSales.update(sale.id, {
-            status: result.success ? 'synced' : 'failed',
-            syncResult: result,
-          });
+          if (result.success) {
+            await db.pendingSales.update(sale.id, {
+              status: 'synced',
+              syncResult: result,
+              syncedAt: new Date()
+            });
+            syncedCount++;
+          } else {
+            // Check if it's a retryable error
+            const isRetryable = !result.error?.includes('Stok') && 
+                               !result.error?.includes('tidak ditemukan');
+            
+            if (isRetryable && sale.retryCount < RETRY_CONFIG.maxRetries - 1) {
+              await db.pendingSales.update(sale.id, {
+                status: 'retrying',
+                retryCount: sale.retryCount + 1,
+                errorMessage: result.error,
+                syncResult: result
+              });
+              retryingCount++;
+            } else {
+              await db.pendingSales.update(sale.id, {
+                status: 'failed',
+                errorMessage: result.error,
+                syncResult: result
+              });
+              failedCount++;
+            }
+          }
         }
       }
       
@@ -69,19 +181,94 @@ export const syncManager = {
       await db.pendingSales
         .where('status')
         .equals('synced')
-        .and(s => s.createdAt < oneDayAgo)
+        .filter(s => new Date(s.createdAt) < oneDayAgo)
         .delete();
       
-      return response.data;
+      // Schedule retry if there are items in retrying state
+      if (retryingCount > 0) {
+        this._scheduleRetry();
+      }
+
+      const result = { 
+        synced: syncedCount, 
+        failed: failedCount, 
+        retrying: retryingCount 
+      };
+      this._notify('sync_complete', result);
+      return result;
     } catch (error) {
       console.error('Sync failed:', error);
-      return { synced: 0, failed: pending.length, error: error.message };
+      
+      // Mark all syncing items as retrying
+      const syncing = await db.pendingSales
+        .where('status')
+        .equals('syncing')
+        .toArray();
+      
+      for (const sale of syncing) {
+        await db.pendingSales.update(sale.id, {
+          status: 'retrying',
+          retryCount: sale.retryCount + 1,
+          errorMessage: error.message
+        });
+      }
+
+      // Schedule retry
+      this._scheduleRetry();
+
+      const result = { synced: 0, failed: 0, retrying: syncing.length, error: error.message };
+      this._notify('sync_error', result);
+      return result;
+    } finally {
+      this._syncInProgress = false;
     }
   },
+
+  // Schedule a retry with exponential backoff
+  _scheduleRetry() {
+    if (this._retryTimeout) {
+      clearTimeout(this._retryTimeout);
+    }
+
+    // Get the minimum wait time based on retry counts
+    const minDelay = RETRY_CONFIG.baseDelay;
+    
+    this._retryTimeout = setTimeout(() => {
+      if (this.isOnline()) {
+        this.syncPendingSales();
+      }
+    }, minDelay);
+  },
   
-  // Get pending count
+  // Get pending count by status
   async getPendingCount() {
-    return db.pendingSales.where('status').equals('pending').count();
+    const pending = await db.pendingSales.where('status').equals('pending').count();
+    const retrying = await db.pendingSales.where('status').equals('retrying').count();
+    const syncing = await db.pendingSales.where('status').equals('syncing').count();
+    const failed = await db.pendingSales.where('status').equals('failed').count();
+    return { pending, retrying, syncing, failed, total: pending + retrying + syncing };
+  },
+
+  // Get failed sales for review
+  async getFailedSales() {
+    return db.pendingSales.where('status').equals('failed').toArray();
+  },
+
+  // Retry a specific failed sale
+  async retrySale(saleId) {
+    await db.pendingSales.update(saleId, {
+      status: 'pending',
+      retryCount: 0,
+      errorMessage: null
+    });
+    if (this.isOnline()) {
+      this.syncPendingSales();
+    }
+  },
+
+  // Delete a failed sale
+  async deleteSale(saleId) {
+    await db.pendingSales.delete(saleId);
   },
   
   // Cache menus for offline use
