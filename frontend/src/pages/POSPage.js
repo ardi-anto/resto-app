@@ -228,6 +228,7 @@ export function POSPage() {
                   key={menu._id} 
                   menu={menu} 
                   onAdd={() => addToCart(menu)}
+                  onUpdateQty={updateQty}
                   formatCurrency={formatCurrency}
                   cartQty={cart.find(c => c.menu_id === menu._id)?.qty || 0}
                 />
@@ -435,14 +436,13 @@ export function POSPage() {
   );
 }
 
-function MenuCard({ menu, onAdd, formatCurrency, cartQty }) {
+function MenuCard({ menu, onAdd, onUpdateQty, formatCurrency, cartQty }) {
   return (
     <Card 
       className={cn(
-        "cursor-pointer transition-all hover:shadow-lift hover:-translate-y-0.5 active:scale-[0.98]",
+        "cursor-pointer transition-all hover:shadow-lift hover:-translate-y-0.5 active:scale-[0.98] relative overflow-hidden",
         cartQty > 0 && "ring-2 ring-primary"
       )}
-      onClick={onAdd}
       data-testid="pos-menu-item-card"
     >
       <CardContent className="p-3">
@@ -452,16 +452,56 @@ function MenuCard({ menu, onAdd, formatCurrency, cartQty }) {
           ) : (
             <span className="text-3xl">☕</span>
           )}
+          
+          {/* Quantity badge */}
           {cartQty > 0 && (
-            <div className="absolute top-1 right-1 h-6 w-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs font-medium">
+            <div className="absolute top-1 right-1 h-6 w-6 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-xs font-medium shadow-md z-10">
               {cartQty}
             </div>
           )}
+          
+          {/* Plus/Minus overlay - shown when item in cart */}
+          {cartQty > 0 ? (
+            <div 
+              className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 p-2 bg-gradient-to-t from-black/70 via-black/40 to-transparent"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Button 
+                variant="secondary" 
+                size="icon" 
+                className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-foreground shadow-md"
+                onClick={(e) => { e.stopPropagation(); onUpdateQty(menu._id, -1); }}
+                data-testid={`menu-minus-${menu._id}`}
+              >
+                <Minus className="h-4 w-4" />
+              </Button>
+              <span className="text-white font-semibold text-lg min-w-[2rem] text-center tabular-nums drop-shadow-md">
+                {cartQty}
+              </span>
+              <Button 
+                variant="secondary" 
+                size="icon" 
+                className="h-9 w-9 rounded-full bg-white/90 hover:bg-white text-foreground shadow-md"
+                onClick={(e) => { e.stopPropagation(); onUpdateQty(menu._id, 1); }}
+                data-testid={`menu-plus-${menu._id}`}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : (
+            /* Click area for adding - shown when item not in cart */
+            <div 
+              className="absolute inset-0 flex items-center justify-center"
+              onClick={onAdd}
+            />
+          )}
         </div>
-        <h3 className="font-medium text-sm truncate">{menu.name}</h3>
-        <p className="text-sm text-primary font-semibold tabular-nums">
-          {formatCurrency(menu.price)}
-        </p>
+        <div onClick={cartQty === 0 ? onAdd : undefined} className={cartQty > 0 ? "" : "cursor-pointer"}>
+          <h3 className="font-medium text-sm truncate">{menu.name}</h3>
+          <p className="text-sm text-primary font-semibold tabular-nums">
+            {formatCurrency(menu.price)}
+          </p>
+        </div>
       </CardContent>
     </Card>
   );
